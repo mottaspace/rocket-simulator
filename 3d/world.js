@@ -139,7 +139,7 @@ void main(){
 
 function cloudMaterial(baked) {
   return new THREE.ShaderMaterial({
-    uniforms: { uSun: { value: SUN_DIR.clone() }, uCloud: { value: baked.cloud.texture }, uTime: { value: 0 }, uHaze: { value: 0 }, uHazeDist: { value: 60000 }, uHazeColor: { value: new THREE.Color() } },
+    uniforms: { uSun: { value: SUN_DIR.clone() }, uCloud: { value: baked.cloud.texture }, uTime: { value: 0 }, uHaze: { value: 0 }, uHazeDist: { value: 60000 }, uHazeColor: { value: new THREE.Color() }, uShell: { value: 1 }, uCover: { value: 1 } },
     vertexShader: `${LOGV}
 varying vec3 vN; varying vec3 vW;
 void main(){ vN = normalize(position); vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w;
@@ -147,12 +147,12 @@ void main(){ vN = normalize(position); vec4 w = modelMatrix * vec4(position, 1.0
 }`,
     fragmentShader: `${LOGF}
 ${NOISE}${SPH}
-uniform sampler2D uCloud; uniform vec3 uSun; uniform float uTime; uniform float uHaze; uniform float uHazeDist; uniform vec3 uHazeColor;
+uniform sampler2D uCloud; uniform vec3 uSun; uniform float uTime; uniform float uHaze; uniform float uHazeDist; uniform vec3 uHazeColor; uniform float uShell; uniform float uCover;
 varying vec3 vN; varying vec3 vW;
 void main(){
 #include <logdepthbuf_fragment>
   vec3 n = normalize(vN);
-  float c = sampleSph(uCloud, n, uTime * 0.000004).r;
+  float c = clamp(sampleSph(uCloud, n, uTime * 0.000004).r * uCover, 0.0, 1.0) * uShell;
   float dist = length(cameraPosition - vW);
   c = clamp(c * mix(1.0, 0.7 + 0.6 * vnoise(n * 1500.0), (1.0 - smoothstep(15000.0, 150000.0, dist))), 0.0, 1.0);
   if (c < 0.01) discard;
@@ -172,9 +172,9 @@ void main(){
 
 function skyMaterial() {
   return new THREE.ShaderMaterial({
-    uniforms: { uSun: { value: SUN_DIR.clone() }, uUp: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 0 }, uDip: { value: 0 } },
+    uniforms: { uSun: { value: SUN_DIR.clone() }, uUp: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 0 }, uDip: { value: 0 }, uFlash: { value: 0 }, uGloom: { value: 0 } },
     vertexShader: `varying vec3 vD; void main(){ vD = position; vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
-    fragmentShader: `uniform vec3 uSun; uniform vec3 uUp; uniform float uAlt; uniform float uDip; varying vec3 vD;
+    fragmentShader: `uniform vec3 uSun; uniform vec3 uUp; uniform float uAlt; uniform float uDip; uniform float uFlash; uniform float uGloom; varying vec3 vD;
 void main(){
   vec3 d = normalize(vD);
   float e = dot(d, uUp) + uDip;                         // 고도가 높을수록 지평선이 내려감
@@ -190,7 +190,9 @@ void main(){
   col = mix(space, col, pow(dens, 0.55));
   float glow = (1.0 - smoothstep(0.0, 0.012, abs(e))) * (1.0 - dens) * smoothstep(0.0, 0.3, 1.0 - dens) * 0.9;
   col += vec3(0.25, 0.5, 1.0) * glow * max(sunUp + 0.3, 0.0);   // 우주에서 본 대기 띠
-  col += vec3(1.0, 0.95, 0.88) * smoothstep(0.99955, 0.99985, mu) * 40.0; // 태양 원반
+  col = mix(col, vec3(0.32, 0.34, 0.38) * 0.6, uGloom);                   // 흐린 날·뇌우
+  col += vec3(1.0, 0.95, 0.88) * smoothstep(0.99955, 0.99985, mu) * 40.0 * (1.0 - uGloom); // 태양 원반
+  col += vec3(0.8, 0.85, 1.0) * uFlash;
   gl_FragColor = vec4(col, 1.0);
   ${OUT}
 }`,
@@ -219,6 +221,50 @@ void main(){
 }`,
     side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
+}
+
+// ── 입체 구름: 인스턴스 빌보드(한 번에 그림). 카메라에 너무 가까우면 흐려져 구름 속을 지나는 느낌 ──
+const cloudPuffShader = {
+  uniforms: { uTex: { value: null }, uBase: { value: new THREE.Color(0.55, 0.58, 0.64) }, uTop: { value: new THREE.Color(1, 1, 1) }, uLight: { value: 1 }, uOpacity: { value: 1 }, uFar: { value: 60000 }, uHazeColor: { value: new THREE.Color() }, uHaze: { value: 0 } },
+  vertexShader: `${LOGV}
+attribute vec3 iOffset; attribute float iSize; attribute float iShade; attribute float iSeed; attribute float iAlpha;
+varying vec2 vUv; varying float vShade; varying float vDist; varying float vSize; varying float vAlpha;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(iOffset, 1.0);
+  float a = iSeed * 6.2831; vec2 p = mat2(cos(a), sin(a), -sin(a), cos(a)) * position.xy;
+  mv.xy += p * iSize;
+  vUv = uv; vShade = iShade; vDist = -mv.z; vSize = iSize; vAlpha = iAlpha;
+  gl_Position = projectionMatrix * mv;
+#include <logdepthbuf_vertex>
+}`,
+  fragmentShader: `${LOGF}
+uniform sampler2D uTex; uniform vec3 uBase; uniform vec3 uTop; uniform float uLight; uniform float uOpacity; uniform float uFar; uniform vec3 uHazeColor; uniform float uHaze;
+varying vec2 vUv; varying float vShade; varying float vDist; varying float vSize; varying float vAlpha;
+void main(){
+#include <logdepthbuf_fragment>
+  vec4 t = texture2D(uTex, vUv);
+  float a = t.a * vAlpha * uOpacity;
+  a *= smoothstep(0.08, 0.55, vDist / vSize);            // 카메라가 구름 속에 들어가면 투명하게
+  a *= 1.0 - smoothstep(uFar * 0.6, uFar, vDist);
+  if (a < 0.01) discard;
+  vec3 col = mix(uBase, uTop, clamp(vShade * 0.8 + t.r * 0.35, 0.0, 1.0)) * uLight;
+  col = mix(col, uHazeColor, (1.0 - exp(-vDist / 40000.0)) * uHaze);
+  gl_FragColor = vec4(col, a);
+  ${OUT}
+}`,
+};
+// 뭉게구름 조각 텍스처: 여러 겹의 둥근 덩어리, 위쪽이 밝음 (r = 밝기, a = 투명도)
+function cloudPuffTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  for (let i = 0; i < 34; i++) {
+    const ang = hash(i, 1, 1) * Math.PI * 2, r = Math.sqrt(hash(i, 2, 2)) * 34, x = 64 + Math.cos(ang) * r, y = 66 + Math.sin(ang) * r * 0.75, s = 14 + hash(i, 3, 3) * 26;
+    const g = c.createRadialGradient(x, y, 0, x, y, s);
+    const sh = Math.round(255 - (y - 30) * 1.1);
+    g.addColorStop(0, `rgba(${sh},${sh},${sh},0.5)`); g.addColorStop(1, `rgba(${sh},${sh},${sh},0)`);
+    c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.NoColorSpace; return t;
 }
 
 const particleShader = {
@@ -308,11 +354,12 @@ export class World {
 
   dispose() {
     const kill = o => o.traverse(c => { if (c.geometry) c.geometry.dispose(); if (c.material) [].concat(c.material).forEach(m => { if (m.map) m.map.dispose(); m.dispose(); }); });
-    [this.planet, this.cloudShell, this.atmos, this.ground, this.pad, this.trees, this.puffs, this.stars, this.particles].forEach(o => { if (o) { if (o.parent) o.parent.remove(o); kill(o); } });
+    [this.planet, this.cloudShell, this.atmos, this.ground, this.pad, this.trees, this.stars, this.particles].forEach(o => { if (o) { if (o.parent) o.parent.remove(o); kill(o); } });
   }
 
   build(tier) {
     this.dispose();
+    if (this.clouds) { this.padRoot.remove(this.clouds); this.clouds = null; }
     this.tier = tier;
     const T = tier;
     if (this.baked) { this.baked.surf.dispose(); this.baked.cloud.dispose(); }
@@ -391,18 +438,7 @@ export class World {
     this.trees.castShadow = T.shadows;
     this.padRoot.add(this.trees);
 
-    // 구름 덩어리: 구름층 높이에 발사장 주변으로 배치 → 로켓이 뚫고 지나감
-    this.puffs = new THREE.Group();
-    const pm = new THREE.SpriteMaterial({ map: puffTexture(), depthWrite: false, fog: false, color: 0xffffff });
-    this.puffMat = pm;
-    for (let i = 0; i < T.puffs; i++) {
-      const r = Math.pow(hash(i, 11, 2), 0.7) * 24000, a = hash(i, 13, 4) * Math.PI * 2;
-      const p = surfaceOffset(Math.cos(a) * r, Math.sin(a) * r, CLOUD_ALT - 700 + hash(i, 17, 6) * 1400);
-      const sp = new THREE.Sprite(pm), w = 900 + hash(i, 21, 3) * 1800;
-      sp.scale.set(w, w * 0.55, 1); sp.position.set(p[0], p[1], p[2]);
-      this.puffs.add(sp);
-    }
-    this.padRoot.add(this.puffs);
+    this.buildClouds();
 
     // 별
     const sp = [], sc = [];
@@ -428,6 +464,90 @@ export class World {
     this.particles = new THREE.Points(pg, new THREE.ShaderMaterial({ ...particleShader, uniforms: THREE.UniformsUtils.clone(particleShader.uniforms), transparent: true, depthWrite: false }));
     this.particles.frustumCulled = false;
     this.scene.add(this.particles);
+  }
+
+  setWeather(w) { this.weather = w; this.buildClouds(); }
+
+  // 날씨에 따라 뭉게구름·층운·권운·적란운을 배치 (발사장 기준 좌표)
+  buildClouds() {
+    if (this.clouds) { this.padRoot.remove(this.clouds); this.clouds.geometry.dispose(); this.clouds.material.dispose(); }
+    if (this.rain) { this.scene.remove(this.rain); this.rain.geometry.dispose(); this.rain.material.dispose(); this.rain = null; }
+    const w = this.weather || { key: 'clear', clouds: 0.25 }, T = this.tier, cov = w.clouds;
+    const rnd = (() => { let k = 12345 + Math.floor(cov * 1000) + (w.key || '').length * 77; return () => { k = (k * 16807) % 2147483647; return k / 2147483647; }; })();
+    const puffs = [];
+    const per = T.key === 'high' ? 16 : T.key === 'medium' ? 11 : 7;
+    const nClusters = Math.round((T.key === 'high' ? 110 : T.key === 'medium' ? 55 : 18) * cov);
+    const storm = w.key === 'storm';
+    for (let c = 0; c < nClusters; c++) {
+      // 일부는 로켓이 지나가는 길(발사장 위·동쪽) 가까이에 둠
+      const nearPath = c < nClusters * 0.25;
+      const r = nearPath ? rnd() * 2500 : 2000 + Math.pow(rnd(), 0.8) * 26000, a = rnd() * Math.PI * 2;
+      const ce = Math.cos(a) * r - (nearPath ? rnd() * 3000 : 0), cn = Math.sin(a) * r;
+      const base = 1400 + rnd() * 900, tower = storm && rnd() < 0.5;
+      const H = tower ? 5000 + rnd() * 5000 : 600 + rnd() * 1600, W = tower ? 2500 + rnd() * 2000 : 900 + rnd() * 1600;
+      const n = Math.round(per * (tower ? 1.8 : 1));
+      for (let i = 0; i < n; i++) {
+        const t = Math.pow(rnd(), tower ? 0.8 : 1.3), wid = W * (tower ? (0.55 + 0.45 * (t > 0.85 ? 1.8 : 1 - t * 0.3)) : (1 - t * 0.55));
+        const ang = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * wid * 0.5;
+        const p = surfaceOffset(ce + Math.cos(ang) * rr, cn + Math.sin(ang) * rr, base + t * H);
+        puffs.push([p[0], p[1], p[2], (0.45 + rnd() * 0.5) * W * (tower ? 0.6 : 0.75), t, rnd(), 0.75 + rnd() * 0.25]);
+      }
+    }
+    // 층운(넓고 납작한 구름층): 구름 많음·뇌우
+    if (cov > 0.6) for (let i = 0; i < (T.key === 'low' ? 40 : 120); i++) {
+      const r = Math.sqrt(rnd()) * 24000, a = rnd() * Math.PI * 2, p = surfaceOffset(Math.cos(a) * r, Math.sin(a) * r, 2600 + rnd() * 700);
+      puffs.push([p[0], p[1], p[2], 2200 + rnd() * 1800, 0.4, rnd(), 0.35 + rnd() * 0.25]);
+    }
+    // 권운(높고 얇은 새털구름)
+    if (w.key !== 'storm') for (let i = 0; i < 26; i++) {
+      const r = Math.sqrt(rnd()) * 30000, a = rnd() * Math.PI * 2, p = surfaceOffset(Math.cos(a) * r, Math.sin(a) * r, 8000 + rnd() * 1500);
+      puffs.push([p[0], p[1], p[2], 3500 + rnd() * 3000, 1, rnd(), 0.16 + rnd() * 0.12]);
+    }
+    const N = Math.max(1, puffs.length);
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.copy(new THREE.PlaneGeometry(1, 1));
+    geo.instanceCount = puffs.length;
+    const off = new Float32Array(N * 3), size = new Float32Array(N), shade = new Float32Array(N), seed = new Float32Array(N), alpha = new Float32Array(N);
+    puffs.forEach((q, i) => { off.set([q[0], q[1], q[2]], i * 3); size[i] = q[3]; shade[i] = q[4]; seed[i] = q[5]; alpha[i] = q[6]; });
+    geo.setAttribute('iOffset', new THREE.InstancedBufferAttribute(off, 3));
+    geo.setAttribute('iSize', new THREE.InstancedBufferAttribute(size, 1));
+    geo.setAttribute('iShade', new THREE.InstancedBufferAttribute(shade, 1));
+    geo.setAttribute('iSeed', new THREE.InstancedBufferAttribute(seed, 1));
+    geo.setAttribute('iAlpha', new THREE.InstancedBufferAttribute(alpha, 1));
+    this.puffData = puffs;
+    const m = new THREE.ShaderMaterial({ ...cloudPuffShader, uniforms: THREE.UniformsUtils.clone(cloudPuffShader.uniforms), transparent: true, depthWrite: false });
+    m.uniforms.uTex.value = this.puffTex || (this.puffTex = cloudPuffTexture());
+    if (storm) { m.uniforms.uBase.value.setRGB(0.16, 0.17, 0.2); m.uniforms.uTop.value.setRGB(0.75, 0.77, 0.8); }
+    else if (cov > 0.6) { m.uniforms.uBase.value.setRGB(0.42, 0.45, 0.5); m.uniforms.uTop.value.setRGB(0.97, 0.97, 0.98); }
+    this.clouds = new THREE.Mesh(geo, m);
+    this.clouds.frustumCulled = false; this.clouds.renderOrder = 4;
+    this.padRoot.add(this.clouds);
+    this.sortTimer = 0;
+    // 비
+    if (w.rain) {
+      const R = T.key === 'high' ? 900 : T.key === 'medium' ? 450 : 150;
+      const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(R * 6), 3).setUsage(THREE.DynamicDrawUsage));
+      this.rain = new THREE.LineSegments(rg, new THREE.LineBasicMaterial({ color: 0xaab4c4, transparent: true, opacity: 0.45, fog: false }));
+      this.rain.frustumCulled = false; this.rainPts = new Float32Array(R * 3).map(() => (Math.random() - 0.5) * 80);
+      this.scene.add(this.rain);
+    }
+    if (this.cloudShell) this.cloudShell.material.uniforms.uCover.value = 0.35 + cov * 0.75;
+  }
+
+  // 번개 줄기 (배경 효과·로켓 낙뢰)
+  bolt(originRel, up) {
+    if (this.boltLine) { this.scene.remove(this.boltLine); this.boltLine.geometry.dispose(); }
+    const pts = [], side = V.norm(V.cross(up, [0.3, 0.5, 0.8]));
+    let p = V.add(originRel, V.mul(up, 2200));
+    const end = V.sub(originRel, V.mul(up, Math.min(2000, 1e9)));
+    for (let i = 0; i < 14; i++) {
+      const q = V.add(V.add(p, V.mul(V.sub(end, p), 1 / (14 - i))), V.add(V.mul(side, (Math.random() - 0.5) * 220), V.mul(V.cross(up, side), (Math.random() - 0.5) * 220)));
+      pts.push(...p, ...q); p = q;
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    this.boltLine = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xeef4ff, fog: false, transparent: true, opacity: 1 }));
+    this.boltLine.frustumCulled = false; this.scene.add(this.boltLine);
+    this.boltT = 0.25; this.flash = 1;
   }
 
   emit(pos, vel, fwd, up, alt, count) {
@@ -479,8 +599,57 @@ export class World {
 
     const near = !mapMode && alt < 60000;
     this.ground.visible = this.pad.visible = this.trees.visible = near;
-    this.puffs.visible = !mapMode && alt < 15000;
-    if (this.puffs.visible) this.puffMat.color.setScalar(0.35 + 0.65 * Math.max(0, sunUp));
+    // 우주에서는 행성 구름층(셸), 가까이서는 입체 구름
+    const w = this.weather || { clouds: 0.25 };
+    this.cloudShell.material.uniforms.uShell.value = mapMode ? 1 : Math.max(0, Math.min(1, (camAlt - 9000) / 16000));
+    let inCloud = 0;
+    if (this.clouds) {
+      this.clouds.visible = !mapMode && camAlt < 40000;
+      const cu = this.clouds.material.uniforms;
+      cu.uLight.value = (0.25 + 1.35 * Math.max(0, Math.min(1, (sunUp + 0.1) / 0.5))) * (w.key === 'storm' ? 0.55 : w.clouds > 0.6 ? 0.85 : 1) * (1 + (this.flash || 0) * 2);
+      cu.uHazeColor.value.copy(haze); cu.uHaze.value = Math.min(0.9, dens);
+      // 카메라·로켓이 구름 조각 안에 있는지 (하얗게 흐려지는 정도)
+      const cam = V.sub(V.add(camWorld, [0, 0, 0]), PAD), rk = V.sub(origin, PAD);
+      for (const q of this.puffData) {
+        const dx = q[0] - rk[0], dy = q[1] - rk[1], dz = q[2] - rk[2], rr = q[3] * 0.42;
+        if (Math.abs(dx) > rr || Math.abs(dy) > rr || Math.abs(dz) > rr) continue;
+        const f = 1 - Math.hypot(dx, dy, dz) / rr; if (f > inCloud) inCloud = f * q[6];
+      }
+      // 뒤에서 앞으로 그리도록 가끔 정렬 (투명 겹침)
+      if ((this.sortTimer -= 1) <= 0 && this.clouds.visible) {
+        this.sortTimer = 20;
+        const n = this.puffData.length, idx = this.puffData.map((q, i) => [i, (q[0] - cam[0]) ** 2 + (q[1] - cam[1]) ** 2 + (q[2] - cam[2]) ** 2]).sort((a, b) => b[1] - a[1]);
+        const A = this.clouds.geometry.attributes, sorted = idx.map(([i]) => this.puffData[i]);
+        sorted.forEach((q, i) => { A.iOffset.array[i * 3] = q[0]; A.iOffset.array[i * 3 + 1] = q[1]; A.iOffset.array[i * 3 + 2] = q[2]; A.iSize.array[i] = q[3]; A.iShade.array[i] = q[4]; A.iSeed.array[i] = q[5]; A.iAlpha.array[i] = q[6]; });
+        this.puffData = sorted;
+        for (const k of ['iOffset', 'iSize', 'iShade', 'iSeed', 'iAlpha']) A[k].needsUpdate = true;
+        void n;
+      }
+    }
+    // 비: 카메라 주변 상자 안에서 떨어지는 빗줄기
+    if (this.rain) {
+      this.rain.visible = !mapMode && camAlt < 2600;
+      if (this.rain.visible) {
+        const arr = this.rain.geometry.attributes.position.array, P = this.rainPts, n = P.length / 3;
+        const fall = V.mul(up, -14 * dt), streak = V.mul(up, 1.6);
+        for (let i = 0; i < n; i++) {
+          for (let a = 0; a < 3; a++) { P[i * 3 + a] += fall[a]; if (P[i * 3 + a] < -40) P[i * 3 + a] += 80; else if (P[i * 3 + a] > 40) P[i * 3 + a] -= 80; }
+          for (let a = 0; a < 3; a++) { const c = camera.position.getComponent(a) + P[i * 3 + a]; arr[i * 6 + a] = c; arr[i * 6 + 3 + a] = c + streak[a]; }
+        }
+        this.rain.geometry.attributes.position.needsUpdate = true;
+      }
+    }
+    // 번개 효과 서서히 꺼짐 + 뇌우 배경 번개
+    if (this.flash) this.flash = Math.max(0, this.flash - dt * 4);
+    if (this.boltLine) { this.boltT -= dt; this.boltLine.material.opacity = Math.max(0, this.boltT * 4); if (this.boltT <= 0) { this.scene.remove(this.boltLine); this.boltLine.geometry.dispose(); this.boltLine = null; } }
+    if (w.lightning && !mapMode && camAlt < 12000 && Math.random() < dt * 0.15) {
+      const hz = up, side = V.norm(V.cross(hz, [0.2, 0.7, 0.4])), d = 3000 + Math.random() * 6000, ang = Math.random() * Math.PI * 2;
+      const pos = V.add(V.mul(side, Math.cos(ang) * d), V.mul(V.cross(hz, side), Math.sin(ang) * d));
+      this.bolt(V.sub(V.add(pos, [camera.position.x, camera.position.y, camera.position.z]), V.mul(hz, camAlt - 400)), hz);
+      this.flash = 0.6;
+    }
+    su.uFlash.value = this.flash || 0;
+    su.uGloom.value = mapMode ? 0 : (w.key === 'storm' ? 0.65 : w.clouds > 0.6 ? 0.3 : 0) * Math.max(0, 1 - camAlt / 6000);
 
     // 연기
     const N = this.tier.particles, P = this.particles.geometry.attributes;
@@ -497,7 +666,7 @@ export class World {
     pu.uScale.value = viewportH / (2 * Math.tan(camera.fov * Math.PI / 360));
     pu.uMax.value = Math.max(24, viewportH * (this.tier.key === 'high' ? 0.09 : 0.07));
     pu.uLight.value = 0.25 + 1.6 * Math.max(0, sunUp);
-    return { camAlt, dens, haze };
+    return { camAlt, dens, haze, inCloud };
   }
 }
 

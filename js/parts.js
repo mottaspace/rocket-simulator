@@ -22,6 +22,16 @@
     satObs:{ name: '관측위성', short: '관측위성', mass: 900, h: 2.2, kind: 'sat', sat: 'obs', desc: '망원 카메라로 행성을 내려다봐요.' },
     engV:  { name: '엔진 · 올빼미', short: '올빼미 엔진', mass: 250, thrust: 30000, ispSL: 120, ispV: 370, h: 1.6, kind: 'engine', desc: '우주 전용 엔진. 공기 중에서는 약해요.' },
     srbS:  { name: '소형 고체 부스터', short: '측면 부스터', mass: 150, fuel: 900, thrust: 90000, ispSL: 210, ispV: 230, h: 3.6, kind: 'srb', radial: true, desc: '탱크 옆에 붙이는 보조 로켓. 다 타면 떨어져요.' },
+    catPod:{ name: '냥이 캡슐', short: '냥이 캡슐', mass: 820, h: 1.5, kind: 'pod', cat: true, desc: '고양이 우주비행사가 타요. 무중력에서 꼬리가 둥둥! 냥.' },
+    fairing:{ name: '페어링', short: '페어링', mass: 220, h: 1.6, kind: 'fairing', desc: '위성을 감싸 공기와 열로부터 보호해요. 고도 50 km에서 자동으로 벗겨져요.' },
+    shield:{ name: '열 방패', short: '열 방패', mass: 150, h: 0.35, kind: 'shield', desc: '궤도에서 돌아올 때 공기와의 마찰열(최대 1,600 °C 이상)을 막아요. 캡슐 바로 아래에 두세요.' },
+    lab:   { name: '과학 실험실', short: '실험실', mass: 300, h: 1.2, kind: 'lab', desc: '고도마다 실험을 해서 과학 점수와 과학 상식을 모아요.' },
+    sail:  { name: '태양 돛', short: '태양 돛', mass: 60, h: 0.8, kind: 'sail', desc: '우주에서 펼쳐져 햇빛이 미는 힘(복사압)으로 연료 없이 조금씩 가속해요. 게임에서는 힘을 크게 키웠어요.' },
+    balloon:{ name: '고고도 풍선', short: '풍선', mass: 120, h: 0.6, kind: 'balloon', desc: '헬륨 풍선이 로켓을 18 km까지 들어 올린 뒤 점화해요(로쿤). 공기가 옅어 저항이 작아요. 맨 위에 두세요.' },
+    ion:   { name: '이온 엔진', short: '이온 엔진', mass: 120, thrust: 3000, ispSL: 200, ispV: 3000, h: 0.9, kind: 'engine', ion: true, desc: '전기로 이온을 쏘는 엔진. 연료를 10배 아끼지만 힘이 아주 약하고, 공기 중에서는 거의 작동하지 않아요.' },
+    engH:  { name: '엔진 · 고래', short: '고래 엔진', mass: 3200, thrust: 620000, ispSL: 272, ispV: 312, h: 2.4, kind: 'engine', desc: '아주 강력한 대형 엔진. 큰 탱크와 함께 써요.' },
+    tankXL:{ name: '연료탱크 XL', short: '탱크 XL', mass: 900, fuel: 8000, h: 9.0, kind: 'tank', desc: '아주 큰 탱크' },
+    fin:   { name: '안정 날개', short: '날개', mass: 40, h: 1.6, kind: 'fin', radial: true, desc: '화살 깃처럼 로켓이 바람에 흔들리지 않게 잡아 줘요. 맨 아래 부품 옆에 붙이세요.' },
   };
   const PALETTE_ORDER = ['pod', 'chute', 'tankS', 'tankM', 'tankL', 'engS', 'engL', 'srb', 'dec'];
 

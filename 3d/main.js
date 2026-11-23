@@ -5,9 +5,9 @@ import { RenderPass } from './vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
-import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign } from './physics3d.js';
+import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES } from './physics3d.js';
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture } from './world.js';
-import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat } from './rocketModel.js';
+import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType } from './rocketModel.js';
 import { Builder } from './builder.js';
 
 const { PARTS } = window.Parts;
@@ -104,7 +104,8 @@ let mode = 'build';
 let rk = null, design = null, designName = '', autopilot = null, ended = false, map = false, warpIdx = 0, lastEvent = 0, shipSatId = null;
 const WARPS = [1, 2, 4, 10, 50, 200];
 
-const builder = new Builder({ renderer, canvas, env, getTier: () => tierKey, onLaunch: (d, name) => startFlight(d, name) });
+const builder = new Builder({ renderer, canvas, env, getTier: () => tierKey, onLaunch: (d, name) => briefing(d, name), sheet: (h, a) => sheet(h, a) });
+let weatherKey = store.get('rocket3d.weather', 'clear'), weather = makeWeather(weatherKey);
 
 function setMode(m) {
   mode = m; builder.active = m === 'build';
@@ -120,16 +121,21 @@ function rebuildModel() {
   if (rk.isSatellite && rk.deployedSat && rk.deployedSat.ok) {
     const type = PARTS[rk.segs[0].ids.find(id => PARTS[id].kind === 'sat')].sat;
     rocketModel = { group: buildSatellite(type, 24, true), height: 2.2, nozzles: [] };
-  } else rocketModel = buildRocket(rk.parts, tierKey);
+  } else rocketModel = buildRocket(rk.parts, tierKey, { name: designName, balloonUp: rk.balloon === 'rising', sailOpen: rk.sailOpen, fairing: rk.fairing !== 'off' });
+  modelSail = rk.sailOpen; modelBalloon = rk.balloon;
   rocketGroup.add(rocketModel.group);
   canopy.position.y = rocketModel.height;
-  for (const nz of rocketModel.nozzles) { const f = makeFlame(); f.position.set(nz[0], nz[1], nz[2]); f.userData.size = nz[3]; f.userData.booster = nz[4] === 'b'; rocketGroup.add(f); flames.push(f); }
+  for (const nz of rocketModel.nozzles) { const f = makeFlame(nz[4]); f.position.set(nz[0], nz[1], nz[2]); f.userData.size = nz[3]; f.userData.kind = nz[4]; rocketGroup.add(f); flames.push(f); }
   modelVersion = rk.version;
 }
 
+let modelSail = false, modelBalloon = 'none', lastStrike = -1;
 function startFlight(d, name) {
   if (d) { design = normalizeDesign(d); designName = name || '나만의 로켓'; }
-  rk = new Rocket3D(design);
+  weather = makeWeather(weatherKey);
+  world.setWeather(weather);
+  rk = new Rocket3D(design, weather);
+  setFlameType(FLAMES[design.flame] || FLAMES.kerosene); lastStrike = -1;
   autopilot = null; ended = false; lastEvent = 0; warpIdx = 0; map = false; shipSatId = null;
   $('mapBtn').classList.remove('on');
   debrisModels.forEach(m => scene.remove(m.group)); debrisModels.clear();
@@ -137,6 +143,25 @@ function startFlight(d, name) {
   rebuildModel();
   cam.dist = Math.max(30, rocketModel.height * 2.6); cam.el = 0.12; cam.az = 0.5;
   setMode('flight');
+}
+
+// ───────── 발사 전 브리핑 (날씨·발사 기준) ─────────
+function briefing(d, name) {
+  const opts = Object.values(WEATHERS).concat([{ key: 'random', name: '무작위', icon: '🎲' }]);
+  const render = () => {
+    const w = weatherKey === 'random' ? null : makeWeather(weatherKey);
+    const crit = w ? launchCriteria(w) : null, go = crit ? crit.every(c => c.ok) : null;
+    sheet('<h2>🚀 발사 브리핑</h2><p class="muted">' + esc(name) + ' · 발사장: 축소 행성 적도</p><b>오늘의 날씨</b><div class="qrow" id="wrow">' +
+      opts.map(o => `<button data-w="${o.key}" class="${weatherKey === o.key ? 'on' : ''}">${o.icon} ${o.name}</button>`).join('') + '</div>' +
+      (w ? '<table class="rank"><thead><tr><th>발사 기준</th><th class="n">지금</th><th class="n">판정</th></tr></thead><tbody>' +
+        crit.map(c => `<tr><td>${c.text}</td><td class="n">${c.now}</td><td class="n ${c.ok ? 'pass' : 'fail'}">${c.ok ? 'GO' : 'NO-GO'}</td></tr>`).join('') + '</tbody></table>' +
+        `<p class="${go ? 'pass' : 'fail'}">${go ? '✔ 발사 가능 (GO)' : '⚠ 기준을 넘었어요 (NO-GO). 실제라면 발사를 미뤄요. 그래도 도전할 수 있지만 위험해요!'}</p>` +
+        '<p class="muted">' + ({ clear: '바람이 약하고 맑아요.', cloudy: '구름층을 뚫고 올라가요. 실험실이 있으면 구름 속 물방울을 채집할 수 있어요.', windy: '강한 옆바람과 제트기류! 발사탑에 부딪히거나, 날개가 없으면 자세가 흔들릴 수 있어요.', storm: '비와 번개! 번개를 맞으면 장치가 잠시 멈출 수 있어요(아폴로 12호처럼).' }[w.key]) + '</p>'
+        : '<p class="muted">발사할 때 날씨가 무작위로 정해져요.</p>'),
+      [{ label: '조립으로', fn: () => {} }, { label: '발사대로 ▶', primary: true, fn: () => startFlight(d, name) }]);
+    document.querySelectorAll('#wrow button').forEach(b => b.onclick = () => { weatherKey = b.dataset.w; store.set('rocket3d.weather', weatherKey); render(); });
+  };
+  render();
 }
 
 // ───────── 카메라 조작 ─────────
@@ -234,9 +259,9 @@ function sheet(html, actions) {
 }
 function closeSheet() { $('sheetBg').hidden = true; }
 let toastTimer = 0;
-function toast(text, bad) {
+function toast(text, bad, ms) {
   const t = $('toast'); t.textContent = text; t.classList.toggle('bad', !!bad); t.classList.add('show');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), ms || 2600);
 }
 
 function qualityHtml() {
@@ -320,7 +345,7 @@ function trackPerf(now, dtMs) {
   perf.count = 0; perf.windowStart = now;
   $('perfPill').textContent = '그래픽 ' + tier.name + (qualityMode === 'auto' ? '(자동)' : '') + ' · ' + Math.round(perf.fps) + ' fps' + (bench ? ' · 측정 중' : '');
   const avg = perf.frames.reduce((a, b) => a + b, 0) / perf.frames.length;
-  if (qualityMode === 'auto' && !bench && $('sheetBg').hidden && perf.frames.length === 3 && avg < 26 && now - perf.lastChange > 6000 && !document.hidden) {
+  if (qualityMode === 'auto' && !bench && $('sheetBg').hidden && perf.frames.length === 3 && avg < 26 && avg > 4 /* 4fps 미만은 백그라운드 탭 절전으로 봄 */ && now - perf.lastChange > 6000 && !document.hidden) {
     const i = TIER_ORDER.indexOf(tierKey);
     if (i < TIER_ORDER.length - 1) { applyTier(TIER_ORDER[i + 1]); perf.frames = []; toast('화면이 느려서 그래픽을 ' + tier.name + '(으)로 낮췄어요'); }
   }
@@ -430,7 +455,7 @@ function drawDial(axes) {
   dot(rk.fwd, '#ffd166', false);
 }
 
-const ACT_LABEL = { launch: '발사!', boosters: '부스터 분리', stage: '단 분리', deploy: '위성 분리', chute: '낙하산' };
+const ACT_LABEL = { launch: '점화!', balloon: '풍선 띄우기', release: '풍선 분리', boosters: '부스터 분리', stage: '단 분리', deploy: '위성 분리', chute: '낙하산' };
 function updateHud(ob, warp) {
   $('hAlt').textContent = fmtDist(Math.max(0, rk.alt));
   $('hVel').textContent = fmtN(rk.speed) + ' m/s';
@@ -447,7 +472,10 @@ function updateHud(ob, warp) {
     : act === 'deploy' ? (ob && ob.pe > PLANET.atm ? '궤도 진입! 위성을 분리하세요' : '근지점을 45 km 위로 올린 뒤 분리하세요')
     : act === 'stage' ? '남은 단 ' + rk.segs.length + ' · 추력 ' + fmtN(rk.thrustNow / 1000) + ' kN'
     : rk.chute === 'armed' ? '낙하산: 250 m/s 이하·고도 20 km 아래에서 펴져요'
-    : rk.isSatellite ? '인공위성 공전 중' : rk.ignited ? '수직 ' + fmtN(rk.vertSpeed) + ' m/s · ' + fmtN(rk.acc, 1) + ' G' : '발사 버튼 또는 [자동]';
+    : rk.balloon === 'rising' ? '풍선 상승 중 · 18 km에서 자동 분리 (바람 ' + fmtN(rk.windSpeed) + ' m/s)'
+    : rk.isSatellite ? '인공위성 공전 중' + (rk.sailOpen ? ' · 태양 돛 펼침' : '')
+    : rk.ignited ? (rk.q > 3000 ? '동압 ' + fmtN(rk.q / 1000) + ' kPa' + (rk.q > 60000 ? ' ⚠' : '') + ' · ' : '') + (rk.alt < 30000 ? '바람 ' + fmtN(rk.windSpeed) + ' m/s · ' : '') + fmtN(rk.acc, 1) + ' G' + (rk.science.points ? ' · 🔬' + rk.science.points : '')
+    : '날씨 ' + weather.icon + ' ' + weather.name + ' · 바람 ' + fmtN(weather.wind0) + ' m/s';
   const ap = $('apLabel'); ap.hidden = !autopilot; if (autopilot) ap.textContent = '자동 비행: ' + autopilot.label;
   if (Math.abs(rk.throttle * 100 - parseInt($('thVal').textContent, 10)) > 0.5) setThrottle(rk.throttle);
 }
@@ -455,7 +483,8 @@ function updateHud(ob, warp) {
 function flushEvents() {
   while (lastEvent < rk.events.length) {
     const e = rk.events[lastEvent++];
-    if (e.kind !== 'info' || /분리|점화|낙하산|부스터/.test(e.text)) toast(e.text, e.kind === 'bad');
+    if (e.kind !== 'info' || /분리|점화|낙하산|부스터|페어링|풍선|사출/.test(e.text)) toast(e.text + (e.fact && e.kind !== 'bad' ? '\n' + e.fact : ''), e.kind === 'bad', e.fact ? 5200 : 0);
+    if (e.boom) for (let i = 0; i < 8; i++) world.emit(rk.pos, rk.vel, V.norm([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]), horizon(rk.pos).up, 100, 6);
   }
   // 위성 배치 성공 → 우주 목록에 저장
   if (rk.deployedSat && rk.deployedSat.ok && !shipSatId) {
@@ -469,8 +498,9 @@ function flushEvents() {
 }
 
 function showResult() {
-  const ok = rk.state === 'landed';
-  sheet('<h2>' + (ok ? '무사 귀환!' : '비행 종료') + '</h2><div class="bench-grid"><div><span>최고 고도</span><b>' + fmtDist(rk.max.alt) + '</b></div><div><span>최고 속도</span><b>' + fmtN(rk.max.vel) + ' m/s</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div><div><span>궤도 진입</span><b>' + (rk.orbited ? '성공' : '-') + '</b></div></div>',
+  const dg = rk.diagnose();
+  sheet('<h2>' + dg.title + '</h2>' + dg.lines.map(l => '<p>' + esc(l) + '</p>').join('') + (dg.fact ? '<p class="fact">💡 ' + esc(dg.fact) + '</p>' : '') +
+    (rk.science.points ? '<p>🔬 과학 점수 <b>' + rk.science.points + '점</b> (' + [...rk.science.done].length + '개 실험)</p>' : '') + '<div class="bench-grid"><div><span>최고 고도</span><b>' + fmtDist(rk.max.alt) + '</b></div><div><span>최고 속도</span><b>' + fmtN(rk.max.vel) + ' m/s</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div><div><span>최대 동압</span><b>' + fmtN(rk.max.q / 1000) + ' kPa</b></div></div><p class="muted">날씨: ' + weather.icon + ' ' + weather.name + '</p>',
     [{ label: '조립으로', fn: () => setMode('build') }, { label: '다시 비행', primary: true, fn: () => startFlight() }]);
 }
 
@@ -514,20 +544,24 @@ function flightFrame(dtReal) {
     rk.update(dtReal * warp);
     clockExtra += dtReal * (warp - 1) * 1000;
   }
-  if (rk.version !== modelVersion) rebuildModel();
+  if (rk.version !== modelVersion || rk.sailOpen !== modelSail || rk.balloon !== modelBalloon) rebuildModel();
   const alt = rk.alt;
-  if (!paused && rk.thrustNow > 0 && alt < PLANET.atm * 0.8) world.emit(rk.pos, rk.vel, rk.fwd, hz.up, alt, tierKey === 'high' ? 4 : tierKey === 'medium' ? 2 : 1);
+  // 로켓이 번개를 맞음
+  if (rk.strikeAt !== lastStrike && rk.strikeAt >= 0) { lastStrike = rk.strikeAt; world.bolt([0, 0, 0], horizon(rk.pos).up); }
+  const smokeAmt = (FLAMES[design.flame] || FLAMES.kerosene).smokeAmt;
+  if (!paused && rk.thrustNow > 0 && alt < PLANET.atm * 0.8 && Math.random() < smokeAmt) world.emit(rk.pos, rk.vel, rk.fwd, hz.up, alt, Math.max(1, Math.round((tierKey === 'high' ? 4 : tierKey === 'medium' ? 2 : 1) * Math.max(1, smokeAmt))));
   const info = world.update(rk.pos, paused ? 0 : dtReal * Math.min(warp, 4), alt, camera, renderer.domElement.height, map);
 
   // 로켓·불꽃·낙하산
   orient(rocketGroup, rk.fwd, rk.pos);
   const vac = Math.min(1, Math.max(0, alt / PLANET.atm));
-  flameMat.uniforms.uTime.value += dtReal; flameMat.uniforms.uVac.value = vac;
+  for (const m of [flameMat, ionFlameMat]) { m.uniforms.uTime.value += dtReal; m.uniforms.uVac.value = vac; }
   const boosterOn = rk.thrustNow - rk.coreThrust > 0, coreOn = rk.coreThrust > 0;
+  const ionOn = coreOn && rk.active && rk.active.ids.some(id => PARTS[id].ion);
   for (const f of flames) {
-    const on = f.userData.booster ? boosterOn : coreOn;
+    const k = f.userData.kind, on = k === 'booster' ? boosterOn : k === 'ion' ? ionOn : coreOn && !ionOn;
     f.visible = on;
-    if (on) { const s = f.userData.size, L = (f.userData.booster ? 7 : 6 + rk.coreThrust / 30000) * s * (1 + vac * 0.8), w = s * (1 + vac * 1.8); f.scale.set(w, L, w); }
+    if (on) { const s = f.userData.size, L = (k === 'booster' ? 7 : k === 'ion' ? 5 : 6 + rk.coreThrust / 30000) * s * (1 + vac * 0.8), w = s * (1 + vac * 1.8); f.scale.set(w, L, w); }
   }
   canopy.visible = rk.chute === 'open';
   const alive = new Set(rk.debris);
@@ -544,12 +578,14 @@ function flightFrame(dtReal) {
   scene.fog.color.copy(info.haze);
   scene.fog.near = map || alt > 30000 ? 1e10 : 3000 + alt; scene.fog.far = map || alt > 30000 ? 2e10 : 70000 + alt * 4;
   // 구름 속을 지날 때 하얗게
-  const inCloud = !map ? Math.max(0, 1 - Math.abs(alt - 3200) / 650) * (V.len(V.sub(rk.pos, [0, rk.r, 0])) < 26000 ? 1 : 0) : 0;
-  if (inCloud > 0) { scene.fog.color.lerp(new THREE.Color(0.7, 0.72, 0.75), inCloud); scene.fog.near = 20; scene.fog.far = 220 + (1 - inCloud) * 3000; }
+  const inCloud = map ? 0 : Math.min(1, info.inCloud * 1.6);
+  if (inCloud > 0.02) { scene.fog.color.lerp(new THREE.Color(0.62, 0.64, 0.68).multiplyScalar(weather.key === 'storm' ? 0.5 : 1), inCloud); scene.fog.near = 10; scene.fog.far = 150 + (1 - inCloud) * 2500; }
+  hemi.intensity += (world.flash || 0) * 2;
   sun.position.copy(SUN_DIR).multiplyScalar(80); sun.target.position.set(0, 0, 0);
   sun.castShadow = tier.shadows && alt < 300 && !map;
 
   updateCamera(hz);
+  if (!map && rk.q > 2000) { const sh = Math.min(0.25, rk.q / 300000 + rk.windSpeed / 400) * (weather.gust || 0.2); camera.position.x += (Math.random() - 0.5) * sh; camera.position.y += (Math.random() - 0.5) * sh; }
   rocketGroup.visible = !map;
   const ob = updateOrbitView();
   render(scene, camera);
