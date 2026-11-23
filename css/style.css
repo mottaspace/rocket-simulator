@@ -37,6 +37,7 @@ select { background: var(--panel-2); border: 1px solid var(--line); border-radiu
 .login-card p { color: var(--ink-2); line-height: 1.6; margin: 0 0 22px; }
 .google { display: inline-flex; align-items: center; gap: 10px; background: #fff; color: #1f1f1f; border: 0; border-radius: 999px; padding: 12px 22px; font-weight: 600; font-size: 16px; }
 .login-msg { min-height: 1.5em; margin: 14px 0 0 !important; font-size: 13px; color: #ffcf8a !important; }
+.go3d { display: block; margin: 0 auto; padding: 14px 18px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 800; font-size: 17px; text-decoration: none; }
 .link { background: none; border: 0; color: var(--ink-2); text-decoration: underline; font-size: 14px; }
 
 /* ── 상단 바 ── */

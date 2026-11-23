@@ -32,6 +32,7 @@
 | `3d/vendor/` | Three.js r160 및 후처리·환경맵 모듈 (MIT, CDN 없이 동작) |
 
 - 그래픽 품질: PC는 "높음"(그림자·블룸·고해상도 행성), 휴대폰은 "중간"으로 시작하고, 3초 평균이 26fps 아래로 떨어지면 자동으로 한 단계 낮춥니다. 메뉴 → "성능 측정(40초)"으로 기기별 평균·하위 1% fps를 기록합니다.
+- `3d/textures/`의 지구 이미지 출처: NASA Earth Observatory — Blue Marble Next Generation(2004년 8월, 지형·해저지형), Earth at Night 2012. NASA 이미지는 퍼블릭 도메인이며 NASA는 출처 표기를 요청합니다.
 - 배치한 위성은 지금은 이 기기(localStorage)에만 저장되어 실제 시간에 맞춰 공전합니다. 반 공유 우주는 Firestore 연결 단계에서 추가합니다.
 
 ### 로컬 실행

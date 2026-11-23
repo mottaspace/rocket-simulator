@@ -34,7 +34,7 @@ export function horizon(pos) {
   let north = V.sub([0, 0, 1], V.mul(up, up[2]));
   if (V.len(north) < 1e-6) north = V.sub([1, 0, 0], V.mul(up, up[0]));
   north = V.norm(north);
-  return { up, north, east: V.cross(up, north) };
+  return { up, north, east: V.cross(north, up) }; // 오른손 좌표계에서 실제 지리상 동쪽
 }
 
 export function orbit(r, v) {
