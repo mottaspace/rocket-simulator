@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // 사용자 프로필: 본인만 쓰기, 로그인 사용자는 읽기
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['displayName', 'photoURL', 'lastLogin'])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() <= 80;
+
+      // 로켓 설계: 본인만
+      match /designs/{designId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['name', 'parts', 'updatedAt'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 40
+          && request.resource.data.parts is list
+          && request.resource.data.parts.size() <= 24;
+      }
+    }
+
+    // 비행 기록: 로그인 사용자는 모두 읽기(순위표), 본인 이름으로만 생성, 수정 불가
+    match /flights/{flightId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['uid', 'displayName', 'designName', 'parts', 'maxAlt', 'maxVel', 'flightTime', 'missions', 'orbit', 'landed', 'createdAt'])
+        && request.resource.data.maxAlt is int && request.resource.data.maxAlt >= 0 && request.resource.data.maxAlt < 100000000
+        && request.resource.data.maxVel is int && request.resource.data.maxVel >= 0 && request.resource.data.maxVel < 100000
+        && request.resource.data.missions is int && request.resource.data.missions >= 0 && request.resource.data.missions <= 5
+        && request.resource.data.parts is list && request.resource.data.parts.size() <= 24
+        && request.resource.data.designName is string && request.resource.data.designName.size() <= 40
+        && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 40
+        && request.resource.data.createdAt == request.time;
+      allow delete: if isOwner(resource.data.uid);
+      allow update: if false;
+    }
+  }
+}

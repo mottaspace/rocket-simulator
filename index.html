@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>로켓 발사 체험</title>
+  <meta name="description" content="부품으로 로켓을 조립하고 직접 조종해 우주 궤도에 올려 보는 학생용 체험 프로그램">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ───────────── 로그인 화면 ───────────── -->
+<section id="loginScreen" class="screen active">
+  <div class="login-card">
+    <div class="login-logo">🚀</div>
+    <h1>로켓 발사 체험</h1>
+    <p>부품을 골라 로켓을 조립하고,<br>직접 조종해서 우주 궤도에 올려 보세요!</p>
+    <button id="googleBtn" class="google">
+      <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.8 6C12.3 13.6 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.4 28.7c-.5-1.4-.8-3-.8-4.7s.3-3.2.8-4.7l-7.8-6C.9 16.6 0 20.2 0 24s.9 7.4 2.6 10.7l7.8-6z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.4 0-11.7-4.1-13.6-9.7l-7.8 6C6.6 42.6 14.6 48 24 48z"/></svg>
+      Google로 시작하기
+    </button>
+    <p class="login-msg" id="loginMsg"></p>
+    <button id="guestBtn" class="link" hidden>설정 전 체험하기 (저장 안 됨)</button>
+  </div>
+</section>
+
+<!-- ───────────── 조립 화면 ───────────── -->
+<section id="buildScreen" class="screen">
+  <header class="bar">
+    <h1>🚀 로켓 조립</h1>
+    <div class="bar-actions">
+      <select id="example" aria-label="예제 로켓">
+        <option value="">예제 불러오기</option>
+      </select>
+      <button class="icon" id="cloudBtn" aria-label="내 로켓 저장/불러오기">💾</button>
+      <button class="icon" id="rankBtn" aria-label="순위표">🏆</button>
+      <button class="icon" id="helpBtn" aria-label="도움말">?</button>
+      <button class="avatar" id="userBtn" aria-label="내 계정"></button>
+    </div>
+  </header>
+
+  <div class="build-main">
+    <div class="preview-wrap">
+      <canvas id="preview"></canvas>
+      <div class="part-tools" id="partTools" hidden>
+        <button id="moveUp" aria-label="위로">▲</button>
+        <button id="moveDown" aria-label="아래로">▼</button>
+        <button id="removePart" class="danger" aria-label="삭제">🗑</button>
+      </div>
+      <p class="preview-hint" id="previewHint">아래 부품을 눌러 로켓을 쌓아 보세요.<br>위에서부터 아래로 쌓입니다.</p>
+    </div>
+    <aside class="stats" id="stats"></aside>
+  </div>
+
+  <nav class="palette" id="palette" aria-label="부품 목록"></nav>
+
+  <footer class="build-foot">
+    <button id="clearBtn">모두 지우기</button>
+    <button id="toPadBtn" class="go">발사대로 ▶</button>
+  </footer>
+</section>
+
+<!-- ───────────── 비행 화면 ───────────── -->
+<section id="flightScreen" class="screen">
+  <canvas id="world"></canvas>
+
+  <div class="hud-top">
+    <div class="hud-grid">
+      <div><span>고도</span><b id="hAlt">0 m</b></div>
+      <div><span>속도</span><b id="hVel">0 m/s</b></div>
+      <div><span>원지점</span><b id="hAp">-</b></div>
+      <div><span>근지점</span><b id="hPe">-</b></div>
+    </div>
+    <div class="hud-side">
+      <button class="pill" id="menuBtn" aria-label="메뉴">☰</button>
+      <button class="pill" id="mapBtn">지도</button>
+      <button class="pill" id="warpBtn">1×</button>
+    </div>
+  </div>
+
+  <div class="mission-pill" id="missionPill">임무 0/5</div>
+  <div class="toast" id="toast"></div>
+
+  <div class="left-ctrl">
+    <div class="dial-row">
+      <canvas id="dial" width="160" height="160" aria-label="자세 표시기"></canvas>
+      <div class="sas" role="group" aria-label="자동 자세">
+        <button data-sas="off" class="on">수동</button>
+        <button data-sas="pro">진행</button>
+        <button data-sas="retro">역진행</button>
+      </div>
+    </div>
+    <div class="rot">
+      <button id="rotL" aria-label="왼쪽으로 기울이기">⟲</button>
+      <button id="rotR" aria-label="오른쪽으로 기울이기">⟳</button>
+    </div>
+  </div>
+
+  <div class="right-ctrl">
+    <div class="fuel"><span>연료</span><div class="fuel-bar"><i id="fuelFill"></i></div></div>
+    <div class="throttle" id="throttle" aria-label="추력 조절">
+      <div class="th-fill" id="thFill"></div>
+      <div class="th-knob" id="thKnob"></div>
+      <span class="th-val" id="thVal">100%</span>
+    </div>
+    <div class="th-quick">
+      <button id="thMax">최대</button>
+      <button id="thCut">끄기</button>
+    </div>
+  </div>
+
+  <button id="stageBtn" class="stage">발사!</button>
+  <div class="stage-info" id="stageInfo"></div>
+</section>
+
+<!-- ───────────── 시트(팝업) ───────────── -->
+<div class="sheet-bg" id="sheetBg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <div id="sheetBody"></div>
+    <div class="sheet-actions" id="sheetActions"></div>
+  </div>
+</div>
+
+<script type="module" src="js/cloud.js"></script>
+<script src="js/parts.js"></script>
+<script src="js/physics.js"></script>
+<script src="js/render.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
