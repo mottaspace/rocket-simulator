@@ -33,7 +33,7 @@ vec3 surface(vec3 n, out float water){
   water = 1.0 - smoothstep(-0.004, 0.004, h);
   vec3 deep = vec3(0.004, 0.018, 0.06), shallow = vec3(0.01, 0.09, 0.15);
   vec3 sea = mix(deep, shallow, smoothstep(-0.09, 0.0, h));
-  float moist = fbm(n * 3.2 + 11.0, 4) + pad * 0.35 - smoothstep(0.15, 0.32, lat) * smoothstep(0.48, 0.32, lat) * 0.25;
+  float moist = fbm(n * 3.2 + 11.0, 4) + pad * 0.35 - smoothstep(0.15, 0.32, lat) * (1.0 - smoothstep(0.32, 0.48, lat)) * 0.25;
   vec3 desert = vec3(0.42, 0.31, 0.18), grass = vec3(0.09, 0.17, 0.05), forest = vec3(0.025, 0.075, 0.025), tundra = vec3(0.20, 0.19, 0.15), rock = vec3(0.17, 0.15, 0.13);
   vec3 land = mix(desert, grass, smoothstep(0.42, 0.56, moist));
   land = mix(land, forest, smoothstep(0.56, 0.70, moist));
@@ -117,7 +117,7 @@ void main(){
   vec4 s = sampleSph(uSurf, n, 0.0);
   vec3 alb = pow(s.rgb, vec3(2.2)); float water = s.a;
   float dist = length(cameraPosition - vW);
-  alb *= mix(1.0, 0.82 + 0.36 * vnoise(n * 2600.0), (1.0 - water) * smoothstep(120000.0, 20000.0, dist));
+  alb *= mix(1.0, 0.82 + 0.36 * vnoise(n * 2600.0), (1.0 - water) * (1.0 - smoothstep(20000.0, 120000.0, dist)));
   vec3 Vd = normalize(cameraPosition - vW);
   float ndl = dot(n, uSun);
   vec3 sunCol = vec3(1.0, 0.96, 0.90) * 3.2;
@@ -154,7 +154,7 @@ void main(){
   vec3 n = normalize(vN);
   float c = sampleSph(uCloud, n, uTime * 0.000004).r;
   float dist = length(cameraPosition - vW);
-  c = clamp(c * mix(1.0, 0.7 + 0.6 * vnoise(n * 1500.0), smoothstep(150000.0, 15000.0, dist)), 0.0, 1.0);
+  c = clamp(c * mix(1.0, 0.7 + 0.6 * vnoise(n * 1500.0), (1.0 - smoothstep(15000.0, 150000.0, dist))), 0.0, 1.0);
   if (c < 0.01) discard;
   float ndl = dot(n, uSun);
   vec3 tint = mix(vec3(1.0, 0.55, 0.35), vec3(1.0), smoothstep(0.0, 0.35, ndl));
@@ -183,12 +183,12 @@ void main(){
   float mu = max(dot(d, uSun), 0.0);
   vec3 zenith = vec3(0.02, 0.09, 0.36), horizonC = vec3(0.30, 0.47, 0.78);
   vec3 col = mix(zenith, horizonC, pow(1.0 - clamp(e, 0.0, 1.0), 5.0));
-  col = mix(col, vec3(0.30, 0.36, 0.42), smoothstep(0.0, -0.12, e));
+  col = mix(col, vec3(0.30, 0.36, 0.42), (1.0 - smoothstep(-0.12, 0.0, e)));
   col += vec3(1.0, 0.78, 0.5) * pow(mu, 10.0) * 0.45;      // 해 주변 산란
   col *= 1.0 * smoothstep(-0.25, 0.2, sunUp);
   vec3 space = vec3(0.0);
   col = mix(space, col, pow(dens, 0.55));
-  float glow = smoothstep(0.012, 0.0, abs(e)) * (1.0 - dens) * smoothstep(0.0, 0.3, 1.0 - dens) * 0.9;
+  float glow = (1.0 - smoothstep(0.0, 0.012, abs(e))) * (1.0 - dens) * smoothstep(0.0, 0.3, 1.0 - dens) * 0.9;
   col += vec3(0.25, 0.5, 1.0) * glow * max(sunUp + 0.3, 0.0);   // 우주에서 본 대기 띠
   col += vec3(1.0, 0.95, 0.88) * smoothstep(0.99955, 0.99985, mu) * 40.0; // 태양 원반
   gl_FragColor = vec4(col, 1.0);
@@ -235,7 +235,7 @@ void main(){
 #include <logdepthbuf_fragment>
   vec2 q = gl_PointCoord - 0.5; float d = length(q); if (d > 0.5) discard;
   float s = 0.75 + 0.25 * (0.5 - q.y);
-  gl_FragColor = vec4(uColor * uLight * s, vA * smoothstep(0.5, 0.15, d));
+  gl_FragColor = vec4(uColor * uLight * s, vA * (1.0 - smoothstep(0.15, 0.5, d)));
   ${OUT}
 }`,
 };

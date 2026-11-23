@@ -220,8 +220,8 @@ void main(){
 #include <logdepthbuf_fragment>
   float t = 1.0 - vUv.y;                    // 0 = 노즐, 1 = 끝
   float flick = 0.85 + 0.15 * sin(uTime * 60.0 + t * 25.0) * sin(uTime * 37.0 + vUv.x * 30.0);
-  float core = smoothstep(1.0, 0.0, t * (1.05 + uVac * 0.6));
-  float diamonds = (1.0 - uVac) * 0.35 * pow(abs(sin(t * 18.0)), 8.0) * smoothstep(0.7, 0.1, t);
+  float core = (1.0 - smoothstep(0.0, 1.0, t * (1.05 + uVac * 0.6)));
+  float diamonds = (1.0 - uVac) * 0.35 * pow(abs(sin(t * 18.0)), 8.0) * (1.0 - smoothstep(0.1, 0.7, t));
   vec3 hot = vec3(1.0, 0.92, 0.75), mid = vec3(1.0, 0.55, 0.18), vac = vec3(0.55, 0.65, 1.0);
   vec3 col = mix(mix(mid, hot, core), vac, uVac * 0.6 * t);
   float a = (core * 0.9 + diamonds) * flick * (1.0 - t) * uPower * (1.0 - uVac * 0.45);
