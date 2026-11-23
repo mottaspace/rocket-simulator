@@ -6,7 +6,7 @@ import { UnrealBloomPass } from './vendor/addons/postprocessing/UnrealBloomPass.
 import { OutputPass } from './vendor/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
 import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES } from './physics3d.js';
-import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture } from './world.js';
+import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
 import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType } from './rocketModel.js';
 import { Builder } from './builder.js';
 
@@ -48,7 +48,9 @@ sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left: -30, right: 30, top: 30, bottom: -30, near: 1, far: 300 });
 sun.shadow.bias = -0.0004;
 scene.add(hemi, sun, sun.target);
-let world = new World(scene, tier, renderer);
+// NASA 지구 사진을 먼저 불러옴 (실패하면 코드로 만든 행성으로 대신)
+const earth = await loadEarth(tierKey).catch(e => { console.warn('지구 사진을 불러오지 못했어요', e); return null; });
+let world = new World(scene, tier, renderer, earth);
 
 const rocketGroup = new THREE.Group(); scene.add(rocketGroup);
 let rocketModel = null, modelVersion = -1, flames = [];
@@ -151,7 +153,7 @@ function briefing(d, name) {
   const render = () => {
     const w = weatherKey === 'random' ? null : makeWeather(weatherKey);
     const crit = w ? launchCriteria(w) : null, go = crit ? crit.every(c => c.ok) : null;
-    sheet('<h2>🚀 발사 브리핑</h2><p class="muted">' + esc(name) + ' · 발사장: 축소 행성 적도</p><b>오늘의 날씨</b><div class="qrow" id="wrow">' +
+    sheet('<h2>🚀 발사 브리핑</h2><p class="muted">' + esc(name) + ' · 발사장: ' + LAUNCH_SITE.name + ' (실제의 1/16 크기로 줄인 지구)</p><b>오늘의 날씨</b><div class="qrow" id="wrow">' +
       opts.map(o => `<button data-w="${o.key}" class="${weatherKey === o.key ? 'on' : ''}">${o.icon} ${o.name}</button>`).join('') + '</div>' +
       (w ? '<table class="rank"><thead><tr><th>발사 기준</th><th class="n">지금</th><th class="n">판정</th></tr></thead><tbody>' +
         crit.map(c => `<tr><td>${c.text}</td><td class="n">${c.now}</td><td class="n ${c.ok ? 'pass' : 'fail'}">${c.ok ? 'GO' : 'NO-GO'}</td></tr>`).join('') + '</tbody></table>' +

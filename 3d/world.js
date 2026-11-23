@@ -64,22 +64,65 @@ vec4 sampleSph(sampler2D t, vec3 n, float du){
 }
 `;
 
+// ── NASA 지구 사진 (NASA Earth Observatory: Blue Marble Next Generation, Earth at Night 2012) ──
+// 발사장(게임 좌표 +y)이 나로우주센터(북위 34.43°, 동경 127.53°)에 오도록 지구를 돌려 붙인다
+export const LAUNCH_SITE = { name: '나로우주센터', lat: 34.43, lon: 127.53 };
+function earthBasis() {
+  const f = LAUNCH_SITE.lat * Math.PI / 180, l = LAUNCH_SITE.lon * Math.PI / 180;
+  const up = [Math.cos(f) * Math.cos(l), Math.cos(f) * Math.sin(l), Math.sin(f)];
+  const north = [-Math.sin(f) * Math.cos(l), -Math.sin(f) * Math.sin(l), Math.cos(f)];
+  const west = V.cross(up, north);            // 게임 +x = 서쪽 (게임 동쪽 = -x)
+  return { up, north, west };
+}
+const EB = earthBasis();
+// 게임 월드 방향 → 지구 방향 (열 = 게임 x, y, z 축의 지구 좌표)
+export const EARTH_ROT = new THREE.Matrix3().setFromMatrix4(new THREE.Matrix4().makeBasis(new THREE.Vector3(...EB.west), new THREE.Vector3(...EB.up), new THREE.Vector3(...EB.north)));
+export function toEarthDir(n) {
+  return [EB.west[0] * n[0] + EB.up[0] * n[1] + EB.north[0] * n[2], EB.west[1] * n[0] + EB.up[1] * n[1] + EB.north[1] * n[2], EB.west[2] * n[0] + EB.up[2] * n[1] + EB.north[2] * n[2]];
+}
+// CPU에서 사진 색 읽기 (발사장 주변 지면 색·바다 판정)
+function sampleImg(img, d) {
+  const u = Math.atan2(d[1], d[0]) / (2 * Math.PI) + 0.5, v = Math.asin(Math.max(-1, Math.min(1, d[2]))) / Math.PI + 0.5;
+  const x = Math.min(img.width - 1, Math.floor(u * img.width)), y = Math.min(img.height - 1, Math.floor((1 - v) * img.height)), k = (y * img.width + x) * 4;
+  return [img.data[k], img.data[k + 1], img.data[k + 2]];
+}
+function imageData(image) {
+  const cv = document.createElement('canvas'); cv.width = image.width; cv.height = image.height;
+  const c = cv.getContext('2d', { willReadFrequently: true }); c.drawImage(image, 0, 0);
+  return c.getImageData(0, 0, cv.width, cv.height);
+}
+export async function loadEarth(tierKey, base = 'textures/') {
+  const L = new THREE.TextureLoader();
+  const load = (f, srgb) => L.loadAsync(base + f).then(t => { t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace; t.wrapS = THREE.RepeatWrapping; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; return t; });
+  const [day, water, night, daySmall] = await Promise.all([
+    load(tierKey === 'high' ? 'earth_day_4096.jpg' : 'earth_day_2048.jpg', true), load('earth_water_2048.png', false), load('earth_night_2048.jpg', true),
+    tierKey === 'high' ? load('earth_day_2048.jpg', true) : null,
+  ]);
+  return { day, water, night, dayImg: imageData((daySmall || day).image), waterImg: imageData(water.image) };
+}
+
 // 행성 표면·구름 무늬를 시작할 때 한 번만 텍스처로 구워 둔다 (매 프레임 잡음 계산을 피해 휴대폰에서도 가볍게)
-function bakePlanet(renderer, size, oct) {
+function bakePlanet(renderer, size, oct, earth) {
   const mk = () => new THREE.WebGLRenderTarget(size, size / 2, { generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, wrapS: THREE.RepeatWrapping, wrapT: THREE.ClampToEdgeWrapping, depthBuffer: false });
   const surf = mk(), cloud = mk();
   const mat = new THREE.ShaderMaterial({
-    uniforms: { uMode: { value: 0 }, uOct: { value: oct } },
+    uniforms: { uMode: { value: 0 }, uOct: { value: oct }, uNasa: { value: earth ? 1 : 0 }, uRot: { value: EARTH_ROT }, uDay: { value: earth ? earth.day : null }, uWater: { value: earth ? earth.water : null }, uNight: { value: earth ? earth.night : null } },
     vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
     fragmentShader: `${NOISE}${SURFACE}${SPH}
-uniform int uMode; varying vec2 vUv;
+uniform int uMode; uniform int uNasa; uniform mat3 uRot; uniform sampler2D uDay; uniform sampler2D uWater; uniform sampler2D uNight; varying vec2 vUv;
 void main(){
   vec3 n = uvToDir(vUv);
-  if (uMode == 0) { float water; vec3 c = surface(n, water); gl_FragColor = vec4(pow(c, vec3(1.0 / 2.2)), water); }
-  else {
+  vec2 e = dirToUv(uRot * n);
+  if (uMode == 0) {
+    float water; vec3 c;
+    if (uNasa == 1) { c = texture2D(uDay, e).rgb; water = texture2D(uWater, e).r; c *= mix(1.0, 0.85, water); }
+    else c = surface(n, water);
+    gl_FragColor = vec4(pow(c, vec3(1.0 / 2.2)), water);
+  } else {
     float big = fbm(n * 1.9 + 2.0, 3);
     float cov = fbm(n * 6.0, uOct) + (big - 0.5) * 0.55 + smoothstep(0.997, 1.0, n.y) * 0.14;
     float city = smoothstep(0.70, 0.82, vnoise(n * 220.0)) * smoothstep(0.45, 0.65, fbm(n * 9.0, 3));
+    if (uNasa == 1) { vec3 nl = texture2D(uNight, e).rgb; city = smoothstep(0.18, 0.6, dot(nl, vec3(0.5, 0.4, 0.1))) * (1.0 - texture2D(uWater, e).r * 0.8); }
     gl_FragColor = vec4(smoothstep(0.62, 0.80, cov), city, 0.0, 1.0);
   }
 }`,
@@ -338,8 +381,8 @@ export function surfaceOffset(e, n, h = 0) {
 }
 
 export class World {
-  constructor(scene, tier, renderer) {
-    this.scene = scene; this.renderer = renderer;
+  constructor(scene, tier, renderer, earth) {
+    this.scene = scene; this.renderer = renderer; this.earth = earth || null;
     this.root = new THREE.Group();
     this.padRoot = new THREE.Group();
     this.padRoot.position.set(PAD[0], PAD[1], PAD[2]);
@@ -364,7 +407,7 @@ export class World {
     const T = tier;
     if (this.baked) { this.baked.surf.dispose(); this.baked.cloud.dispose(); }
     const maxTex = this.renderer.capabilities.maxTextureSize || 4096;
-    this.baked = bakePlanet(this.renderer, Math.min(T.bake, maxTex), T.oct);
+    this.baked = bakePlanet(this.renderer, Math.min(T.bake, maxTex), T.oct, this.earth);
     this.planet = new THREE.Mesh(new THREE.SphereGeometry(PLANET.R - 30, T.planet[0], T.planet[1]), planetMaterial(this.baked));
     this.root.add(this.planet);
     this.cloudShell = new THREE.Mesh(new THREE.SphereGeometry(PLANET.R + CLOUD_ALT, T.planet[0], T.planet[1]), cloudMaterial(this.baked));
@@ -383,9 +426,17 @@ export class World {
         const a = j / segs * Math.PI * 2, e = Math.cos(a) * d, n = Math.sin(a) * d, p = surfaceOffset(e, n);
         pos.push(p[0], p[1], p[2]); uv.push(e / 30, n / 30);
         const f = fbm2(e / 1400 + 50, n / 1400 + 50, 4), g = fbm2(e / 230, n / 230, 3);
+        let alpha = Math.min(1, (1 - d / DMAX) * 4);
         if (d < 55 || (Math.abs(n) < 6 && e < 0 && e > -1500)) c.setRGB(0.36, 0.36, 0.37);   // 발사대 + 진입로
-        else c.setRGB(0.10 + 0.12 * f + 0.05 * g, 0.16 + 0.09 * f, 0.055 + 0.03 * g);         // 들판·숲 (선형 색)
-        col.push(c.r, c.g, c.b, Math.min(1, (1 - d / DMAX) * 4));
+        else if (this.earth) {
+          // NASA 사진 색 + 잔무늬, 바다면 투명 (발사장 1.5 km 안은 늘 땅)
+          const dir = toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]]));
+          const [r, gg2, b] = sampleImg(this.earth.dayImg, dir), wet = sampleImg(this.earth.waterImg, dir)[0] > 128;
+          c.setRGB(r / 255, gg2 / 255, b / 255, THREE.SRGBColorSpace);
+          c.multiplyScalar(0.85 + 0.25 * f + 0.1 * g);
+          if (wet && d > 1500) alpha = 0;
+        } else c.setRGB(0.10 + 0.12 * f + 0.05 * g, 0.16 + 0.09 * f, 0.055 + 0.03 * g);         // 들판·숲 (선형 색)
+        col.push(c.r, c.g, c.b, alpha);
       }
     }
     for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
@@ -430,6 +481,7 @@ export class World {
       const r = 90 + Math.pow(hash(i, 3, 9), 1.4) * 7000, a = hash(i, 7, 1) * Math.PI * 2, e = Math.cos(a) * r, n = Math.sin(a) * r;
       if (Math.abs(n) < 20 && e < 0 && e > -1500) continue;
       const p = surfaceOffset(e, n);
+      if (this.earth && r > 1500 && sampleImg(this.earth.waterImg, toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]])))[0] > 128) { m4.makeScale(0, 0, 0); this.trees.setMatrixAt(i, m4); continue; }
       q.setFromUnitVectors(UP, new THREE.Vector3(p[0], p[1] + PLANET.R, p[2]).normalize());
       const k = 0.7 + hash(i, 5, 5) * 1.0; s.set(k, k * (0.8 + hash(i, 9, 2) * 0.6), k);
       m4.compose(new THREE.Vector3(p[0], p[1], p[2]), q, s); this.trees.setMatrixAt(i, m4);
