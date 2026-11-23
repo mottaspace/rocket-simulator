@@ -1,0 +1,4 @@
+﻿# 외부 REA 소스 (별도 저장소)
+rea/
+node_modules/
+.tools/
