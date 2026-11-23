@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>로켓 발사 체험 3D</title>
+  <meta name="description" content="3D 로켓 조립·발사·궤도 진입·인공위성 배치 체험">
+  <link rel="stylesheet" href="../css/style.css">
+  <link rel="stylesheet" href="style3d.css">
+  <script type="importmap">{ "imports": { "three": "./vendor/three.module.min.js" } }</script>
+</head>
+<body class="mode-build">
+<section id="flightScreen" class="screen active">
+  <canvas id="world"></canvas>
+  <div id="labels" class="fl"></div>
+
+  <!-- ───────── 조립 화면 UI ───────── -->
+  <header class="bar bd b3d-bar">
+    <h1>로켓 조립</h1>
+    <div class="bar-actions">
+      <select id="bExample" aria-label="예제 로켓"></select>
+      <button class="icon" id="bUniverse" aria-label="관제 지도">🛰</button>
+      <button class="icon" id="bMenu" aria-label="메뉴">☰</button>
+    </div>
+  </header>
+  <aside class="b3d-stats bd" id="bStats">
+    <button class="b3d-toggle" id="bStatsToggle" aria-label="성능 표 접기">성능 ▾</button>
+    <div id="bStatsBody"></div>
+  </aside>
+  <div class="b3d-tools bd" id="bTools">
+    <button id="bUp" aria-label="위로">▲</button>
+    <button id="bDown" aria-label="아래로">▼</button>
+    <button id="bDel" class="danger" aria-label="삭제">🗑</button>
+    <div class="b3d-sym" id="bSym" aria-label="측면 부스터 대칭 개수"><span>대칭</span><button data-n="2">2</button><button data-n="3">3</button><button data-n="4">4</button></div>
+  </div>
+  <p class="b3d-empty bd" id="bHintEmpty">아래에서 부품을 눌러 로켓을 쌓아 보세요.<br>부품을 누르면 선택돼요. 화면을 끌면 돌려 볼 수 있어요.</p>
+  <div class="b3d-hint bd" id="bHint"></div>
+  <div class="b3d-bottom bd">
+    <div class="tabs b3d-tabs" id="bTabs"></div>
+    <nav class="palette" id="bPalette" aria-label="부품 목록"></nav>
+    <footer class="build-foot">
+      <button id="bClear" aria-label="모두 비우기">비우기</button>
+      <input id="bName" maxlength="30" aria-label="로켓 이름" placeholder="로켓 이름">
+      <button id="bLaunch" class="go">발사대로 ▶</button>
+    </footer>
+  </div>
+
+  <!-- ───────── 비행 화면 UI ───────── -->
+  <div class="hud-top fl">
+    <div class="hud-grid">
+      <div><span>고도</span><b id="hAlt">0 m</b></div>
+      <div><span>속도</span><b id="hVel">0 m/s</b></div>
+      <div><span>원지점</span><b id="hAp">-</b></div>
+      <div><span>근지점</span><b id="hPe">-</b></div>
+    </div>
+    <div class="hud-side">
+      <button class="pill" id="menuBtn" aria-label="메뉴">☰</button>
+      <button class="pill" id="mapBtn">지도</button>
+      <button class="pill" id="warpBtn">1×</button>
+    </div>
+  </div>
+  <button class="perf-pill fl" id="perfPill">품질 -</button>
+  <div class="ap-label fl" id="apLabel" hidden></div>
+  <div class="left-ctrl fl">
+    <div class="dial-row">
+      <canvas id="dial" width="160" height="160" aria-label="자세 표시기"></canvas>
+      <div class="sas" role="group" aria-label="자동 자세">
+        <button data-sas="off" class="on">수동</button>
+        <button data-sas="pro">진행</button>
+        <button data-sas="retro">역진행</button>
+        <button data-sas="auto">자동</button>
+      </div>
+    </div>
+    <div class="stick" id="stick" aria-label="기울이기 조이스틱"><div class="stick-knob" id="stickKnob"></div></div>
+  </div>
+  <div class="right-ctrl fl">
+    <div class="fuel"><span>연료</span><div class="fuel-bar"><i id="fuelFill"></i></div></div>
+    <div class="throttle" id="throttle" aria-label="추력 조절">
+      <div class="th-fill" id="thFill"></div>
+      <div class="th-knob" id="thKnob"></div>
+      <span class="th-val" id="thVal">100%</span>
+    </div>
+    <div class="th-quick">
+      <button id="thMax">최대</button>
+      <button id="thCut">끄기</button>
+    </div>
+  </div>
+  <button id="stageBtn" class="stage fl">발사!</button>
+  <div class="stage-info fl" id="stageInfo"></div>
+
+  <div class="toast" id="toast"></div>
+  <div class="loading" id="loading">3D 장면을 준비하는 중…</div>
+</section>
+
+<div class="sheet-bg" id="sheetBg" hidden>
+  <div class="sheet" role="dialog" aria-modal="true">
+    <div id="sheetBody"></div>
+    <div class="sheet-actions" id="sheetActions"></div>
+  </div>
+</div>
+
+<script src="../js/parts.js"></script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

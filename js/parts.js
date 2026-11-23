@@ -16,6 +16,12 @@
     engL:  { name: '엔진 · 코뿔소', short: '코뿔소 엔진', mass: 1300, thrust: 230000, ispSL: 265, ispV: 300, h: 1.7, kind: 'engine', desc: '힘이 아주 세요(이륙용).' },
     srb:   { name: '고체 로켓', short: '고체 로켓', mass: 350, fuel: 2000, thrust: 200000, ispSL: 210, ispV: 230, h: 5.0, kind: 'srb', desc: '연료 내장. 한 번 켜면 끌 수 없어요!' },
     dec:   { name: '단 분리기', short: '분리기', mass: 50, h: 0.35, kind: 'dec', desc: '다 쓴 아래 단을 떼어 내요.' },
+    // ── 3D 시제품에서 추가된 부품 (2D 조립 화면 목록에는 나오지 않음) ──
+    nose:  { name: '노즈콘', short: '노즈콘', mass: 80, h: 1.4, kind: 'nose', desc: '뾰족한 머리. 공기저항을 줄여요.' },
+    satCom:{ name: '통신위성', short: '통신위성', mass: 600, h: 1.8, kind: 'sat', sat: 'comm', desc: '궤도에서 분리하면 계속 공전하며 통신을 이어 줘요.' },
+    satObs:{ name: '관측위성', short: '관측위성', mass: 900, h: 2.2, kind: 'sat', sat: 'obs', desc: '망원 카메라로 행성을 내려다봐요.' },
+    engV:  { name: '엔진 · 올빼미', short: '올빼미 엔진', mass: 250, thrust: 30000, ispSL: 120, ispV: 370, h: 1.6, kind: 'engine', desc: '우주 전용 엔진. 공기 중에서는 약해요.' },
+    srbS:  { name: '소형 고체 부스터', short: '측면 부스터', mass: 150, fuel: 900, thrust: 90000, ispSL: 210, ispV: 230, h: 3.6, kind: 'srb', radial: true, desc: '탱크 옆에 붙이는 보조 로켓. 다 타면 떨어져요.' },
   };
   const PALETTE_ORDER = ['pod', 'chute', 'tankS', 'tankM', 'tankL', 'engS', 'engL', 'srb', 'dec'];
 
