@@ -2,3 +2,5 @@
 rea/
 node_modules/
 .tools/
+# PC마다 경로가 다른 Claude Code MCP 설정
+.mcp.json
