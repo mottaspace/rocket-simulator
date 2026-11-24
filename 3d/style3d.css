@@ -105,3 +105,6 @@ body.mode-build .mission-chip.fl, body.mode-flight .mission-chip.bd { display: n
 .stars-big { font-size: 34px; color: #ffd166; letter-spacing: 4px; text-align: center; margin: 6px 0; }
 .mcheck { list-style: none; padding: 0; margin: 6px 0; }
 .mcheck li { padding: 3px 0; font-size: 13.5px; }
+
+#followBtn.on { background: #36c27a; color: #04150c; }
+#followBtn[hidden] { display: none; }

@@ -279,8 +279,10 @@ function partMesh(id, seg, P, opt, wd) {
         for (const [x, z] of LAYOUTS[9]) { const e = one.clone(); e.scale.setScalar(0.3); e.position.set(x * r * 0.95, -0.35, z * r * 0.95); g.add(e); }
         for (let k = 0; k < 4; k++) {
           const a = k * Math.PI / 2 + Math.PI / 4;
-          const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.42), gridMat()); gf.position.set(Math.cos(a) * (r + 0.03), h - 2.0, Math.sin(a) * (r + 0.03)); gf.rotation.y = -a + Math.PI / 2; g.add(gf);
-          const lg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.1), mat('black')); lg.position.set(Math.cos(a) * (r + 0.05), 1.6, Math.sin(a) * (r + 0.05)); lg.rotation.y = -a; g.add(lg);
+          const kg = new THREE.Group(); kg.rotation.y = Math.PI / 2 - a; g.add(kg);   // 바깥쪽 = kg의 +z
+          const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.42), gridMat()); gf.position.set(0, h - 2.0, r + 0.03); gf.userData.grid = r + 0.03; kg.add(gf);
+          const pv = new THREE.Group(); pv.position.set(0, 2.6, r + 0.05); pv.userData.leg = 1; kg.add(pv);
+          const lg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.1), mat('black')); lg.position.y = -1.0; pv.add(lg);
         }
         break;
       }
@@ -331,6 +333,14 @@ function partMesh(id, seg, P, opt, wd) {
   return g;
 }
 
+// 착륙 다리 펴기·격자 날개 펼치기 (분리된 부스터가 돌아올 때)
+export function setLanding(group, legs, grid) {
+  group.traverse(o => {
+    if (o.userData.leg) o.rotation.x = legs ? -0.6 : 0;
+    if (o.userData.grid != null) { o.rotation.x = grid ? Math.PI / 2 : 0; o.position.z = o.userData.grid + (grid ? 0.25 : 0); }
+  });
+}
+
 // 반환: { group, height, nozzles: [[x, y, z, 크기, 종류]], parts: [{ mesh, stack?, radial? }] }
 export function buildRocket(design, quality, opt = {}) {
   const d = Array.isArray(design) ? { stack: design, radial: [] } : design;
@@ -373,12 +383,14 @@ export function buildRocket(design, quality, opt = {}) {
         const hh = Math.min(p.h, hostH * 0.9), fl = new THREE.Mesh(new THREE.BoxGeometry(0.06, hh, 0.95), mat('black'));
         fl.position.set(0, hh / 2 + 0.2, RA + 0.45); b.add(fl); b.position.y = ys[r.at]; b.rotation.y = a;
       } else if (p.kind === 'fin' && p.look === 'grid') {
-        const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.5), gridMat()); gf.position.set(0, hostH - 0.45, RA + 0.03); b.add(gf);
+        const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.5), gridMat()); gf.position.set(0, hostH - 0.45, RA + 0.03); gf.userData.grid = RA + 0.03; b.add(gf);
         const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.1), mat('darkMetal')); arm.position.set(0, hostH - 0.45, RA); b.add(arm);
         b.position.y = ys[r.at]; b.rotation.y = a;
       } else if (p.kind === 'fin' && p.look === 'legs') {
-        const lh = Math.min(p.h, hostH), lg = new THREE.Mesh(new THREE.BoxGeometry(0.16, lh, 0.1), mat('black')); lg.position.set(0, lh / 2, RA + 0.05); b.add(lg);
-        const ft = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.16), mat('darkMetal')); ft.position.set(0, 0.06, RA + 0.08); b.add(ft);
+        // 다리는 위쪽 경첩에 매달려 있다가 착륙 직전 바깥으로 펴짐
+        const lh = Math.min(p.h, hostH), pv = new THREE.Group(); pv.position.set(0, lh, RA + 0.05); pv.userData.leg = 1; b.add(pv);
+        const lg = new THREE.Mesh(new THREE.BoxGeometry(0.16, lh, 0.1), mat('black')); lg.position.y = -lh / 2; pv.add(lg);
+        const ft = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.16), mat('darkMetal')); ft.position.set(0, -lh + 0.06, 0.03); pv.add(ft);
         b.position.y = ys[r.at]; b.rotation.y = a;
       } else if (p.kind === 'fin') {
         const hh = Math.min(p.h, PARTS[d.stack[r.at]].h * 1.1);

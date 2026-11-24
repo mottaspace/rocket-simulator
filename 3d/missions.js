@@ -107,9 +107,15 @@ export const MISSIONS = [
     progress: c => c.maxCluster < 9 ? '엔진을 9개 이상 묶으세요 (엔진 선택 → 엔진 ×9)' : c.sat ? '위성 분리 성공!' : '궤도에서 위성 분리',
   },
   {
-    id: 'landing', icon: '🛬', title: '부스터 재착륙', goal: '1단 부스터를 다시 착륙시키기',
-    learn: '팰컨 9은 2015년 처음으로 1단을 착륙시켰어요. 로켓을 다시 쓰면 발사 비용이 크게 줄어요.',
-    soon: true,
+    id: 'landing', icon: '🛬', title: '부스터 재착륙', goal: '분리한 부스터를 다시 착륙시키기',
+    learn: '팰컨 9은 2015년 처음으로 1단을 착륙시켰어요. 로켓을 다시 쓰면 발사 비용이 크게 줄어요. 착륙 다리나 격자 날개를 단 단은 연료를 22% 남기고 분리돼 스스로 돌아와요.',
+    rec: 'real:f9',
+    done: c => c.rk.landings.some(l => l.ok),
+    bonus: [
+      { text: '부스터 2개 이상 착륙시키기 (팰컨 헤비)', ok: c => c.rk.landings.filter(l => l.ok).length >= 2 },
+      { text: '초속 3 m 이하로 사뿐히 착륙', ok: c => c.rk.landings.some(l => l.ok && l.speed <= 3) },
+    ],
+    progress: c => { const n = c.rk.landings.filter(l => l.ok).length, f = c.rk.debris.filter(d => d.lander && !d.lander.result).length; return n ? '착륙 성공 ' + n + '개' + (f ? ' · 비행 중 ' + f : '') : f ? '부스터 착륙 비행 중 (🛬 버튼으로 따라가 보세요)' : '착륙 다리나 격자 날개를 단 단을 분리하세요'; },
   },
 ];
 

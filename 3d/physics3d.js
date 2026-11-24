@@ -65,13 +65,110 @@ export function orbit(r, v) {
   return { e, p, a, eps, P, Q, ap: ra - PLANET.R, pe: rp - PLANET.R, escape: eps >= 0, flat: hl < 1 };
 }
 
+
+// ───────── 부스터 재착륙 (팰컨 9·팰컨 헤비·슈퍼 헤비처럼) ─────────
+// 착륙 다리나 격자 날개가 달린 단은 연료를 15% 남기고 분리되어 스스로 돌아와 착륙해요.
+export const RESERVE = 0.22;
+const PAD_POS = [0, PLANET.R, 0];
+// 발사장 옆 착륙장(LZ): 발사장에서 남동쪽 약 1.3 km (늘 육지)
+const lzAt = (e, n) => { const hz = horizon(PAD_POS); return V.mul(V.norm(V.add(PAD_POS, V.add(V.mul(hz.east, e), V.mul(hz.north, n)))), PLANET.R); };
+export const LZ_LIST = [lzAt(900, -900), lzAt(1000, -800)];   // 착륙장 2곳 (팰컨 헤비 부스터 2개가 나란히 내림)
+export const LZ_POS = LZ_LIST[0];
+export const SEA_DECK = -29;     // 해상 착륙선 갑판 높이 (바다 표면이 행성 반지름보다 30 m 낮게 그려짐)
+const surfDist = (a, b) => PLANET.R * Math.acos(Math.max(-1, Math.min(1, V.dot(V.norm(a), V.norm(b)))));
+
+// 분리된 단을 착륙선(lander)으로 만들기. 연료로 낼 수 있는 Δv를 보고 착륙장 귀환 또는 해상 착륙을 고름
+export function makeLander(d, info) {
+  const m0 = info.dry + info.fuel, ve = info.isp * G0, dv = ve * Math.log(m0 / info.dry);
+  const hz = horizon(d.pos), vh = V.sub(d.vel, V.mul(hz.up, V.dot(d.vel, hz.up)));
+  const backDv = V.len(vh) * 1.9 + 250;
+  const L = { ...info, phase: 'flip', burn: 0, legs: false, grid: false, t: 0, result: null, dv, entryDone: false };
+  if (dv > backDv + 480) { L.mode = 'rtls'; L.target = LZ_LIST[(info.slot || 0) % LZ_LIST.length].slice(); L.ground = 0; }
+  else {
+    const pr = predictImpact(d.pos, d.vel, 'booster', 2.0 * AREA * (info.area || 1) / m0);
+    L.mode = 'ship'; L.target = pr.orbit ? V.mul(V.norm(d.pos), PLANET.R) : pr.pos; L.ground = SEA_DECK; L.phase = 'coast';
+  }
+  return L;
+}
+
+// 착륙선 한 걸음 (h초)
+function landerStep(d, h) {
+  const L = d.lander;
+  if (L.result) return;
+  const r = V.len(d.pos), alt = r - PLANET.R, up = V.mul(d.pos, 1 / r), hz = horizon(d.pos);
+  const g = PLANET.mu / (r * r), m = L.dry + L.fuel, Tmax = L.thrust;
+  const vz = V.dot(d.vel, up), vh = V.sub(d.vel, V.mul(up, vz));
+  const tgtH = (() => { const t = V.sub(L.target, d.pos); return V.sub(t, V.mul(up, V.dot(t, up))); })();
+  const dist = V.len(tgtH), hAlt = alt - L.ground;
+  let dir = null, thr = 0, aLat = [0, 0, 0];
+  L.t += h;
+  L.grid = hAlt < 70000 && L.phase !== 'flip' && L.phase !== 'boost';
+  if (L.phase === 'flip') {                        // 엔진이 돌아갈 방향으로 뒤집기
+    dir = V.norm(V.mul(vh, -1)); if (L.t > 3) L.phase = L.mode === 'rtls' ? 'boost' : 'coast';
+  } else if (L.phase === 'boost') {                // 역추진: 떨어질 곳이 착륙장이 되도록 (0.5초마다 낙하 지점 다시 계산)
+    if ((L.predT = (L.predT || 0) - h) <= 0) {
+      L.predT = 0.1;
+      const pr = predictImpact(d.pos, d.vel, null, 2.0 * AREA * (L.area || 1) / m);
+      L.predErr = pr.orbit ? tgtH : (() => { const e = V.sub(L.target, pr.pos); return V.sub(e, V.mul(up, V.dot(e, up))); })();
+    }
+    const e = L.predErr, landFuel = L.dry * (Math.exp(450 / (L.isp * G0)) - 1);
+    if (V.len(e) < 120 || L.fuel <= landFuel) L.phase = 'coast';
+    else { dir = V.norm(e); thr = V.dot(d.fwd, dir) > 0.97 ? Math.min(1, V.len(e) / 40000 + 0.04) : 0; }
+  }
+  if (L.phase === 'coast' || L.phase === 'entry') {
+    // 격자 날개로 목표 쪽으로 미끄러지기 (공기가 짙을수록 잘 듦)
+    const rho = density(Math.max(0, alt)), q = 0.5 * rho * V.dot(d.vel, d.vel);
+    const tf = Math.max(6, hAlt / Math.max(30, -vz)), want = V.mul(tgtH, 1 / tf), err = V.sub(want, vh), lim = Math.min(35, q / 700);
+    if (V.len(err) > 0) aLat = V.mul(V.norm(err), Math.min(lim, V.len(err) * 0.8));
+    dir = V.norm(V.mul(d.vel, -1));
+    // 재진입 연소: 공기가 짙어지기 전에 속도를 줄여 열을 막음
+    const landFuel = L.dry * (Math.exp(430 / (L.isp * G0)) - 1);
+    if (!L.entryDone && hAlt < 32000 && hAlt > 9000 && V.len(d.vel) > (L.phase === 'entry' ? 480 : 700) && L.fuel > landFuel) { L.phase = 'entry'; thr = 1; }
+    else if (L.phase === 'entry') { L.phase = 'coast'; L.entryDone = true; }
+    // 착륙 연소 시작: 지금 속도를 멈추는 데 걸리는 시간보다 땅까지 남은 시간이 짧아지면
+    const aMax = Tmax / m - g, sp = V.len(d.vel);
+    if (aMax > 1 && vz < 0 && (hAlt <= vz * vz / (2 * aMax * 0.8) + 60 || hAlt / -vz <= V.len(vh) / (aMax * 0.5))) L.phase = 'land';
+  }
+  if (L.phase === 'land') {                        // 착륙 연소: 땅에 닿을 때 속도가 0이 되도록 (호버슬램)
+    const hh = Math.max(0.5, hAlt - 0.5);
+    const az = vz < -2 ? g + vz * vz / (2 * hh) * 1.08 : g + (-1.5 - vz) * 2.5;
+    const tgo = Math.max(1, hh / Math.max(2, -vz));
+    const aH = V.add(V.mul(vh, -1.25 / tgo), V.mul(tgtH, Math.min(1, hAlt / 300) * 0.8 / (tgo * tgo)));
+    const A = V.add(V.mul(up, Math.max(0, az)), aH);
+    dir = V.norm(A); thr = Math.max(0, Math.min(1, V.len(A) * m / Tmax));
+    if (thr < 0.05) thr = 0;
+    L.legs = L.legs || hAlt < 800;
+  }
+  if (L.fuel <= 0) thr = 0;
+  // 자세: 원하는 방향으로 빠르게 돌림
+  if (dir) d.fwd = V.toward(d.fwd, dir, 1.6 * h);
+  const thrust = Tmax * thr;
+  if (thrust > 0) L.fuel = Math.max(0, L.fuel - thrust / (L.isp * G0) * h);
+  L.burn = thr;
+  // 힘: 추력 + 중력 + 공기저항(엔진 쪽이 앞이라 뭉툭) + 격자 날개
+  const rho = density(Math.max(0, alt)), sp = V.len(d.vel);
+  const drag = sp > 0 ? V.mul(d.vel, -0.5 * rho * sp * (L.grid ? 2.0 : 1.0) * AREA * (L.area || 1) / m) : [0, 0, 0];
+  const acc = V.add(V.add(V.mul(d.fwd, thrust / m), V.mul(up, -g)), V.add(drag, aLat));
+  d.vel = V.add(d.vel, V.mul(acc, h));
+  d.pos = V.add(d.pos, V.mul(d.vel, h));
+  const nAlt = V.len(d.pos) - PLANET.R - L.ground;
+  if (nAlt <= 0) {
+    const speed = V.len(d.vel), tilt = V.angle(d.fwd, up), miss = surfDist(d.pos, L.target);
+    d.pos = V.mul(V.norm(d.pos), PLANET.R + L.ground);
+    const ok = speed < 6 && tilt < 0.3 && (L.mode === 'rtls' ? miss < 150 : miss < 60);
+    L.result = { ok, speed, miss, where: L.mode === 'rtls' ? '착륙장' : '해상 착륙선' };
+    if (ok) { d.vel = [0, 0, 0]; d.fwd = up; d.life = 240; L.burn = 0; }
+    else { d.life = 0; L.result.reason = speed >= 6 ? '너무 빨리 내려왔어요' : tilt >= 0.3 ? '기울어져 넘어졌어요' : (L.mode === 'rtls' ? '착륙장을 벗어났어요' : '배를 놓치고 바다에 빠졌어요'); }
+  }
+}
+
 // 분리된 부품이 어디에 떨어질지 미리 계산 (중력 + 공기저항, 바람은 무시)
 // 돌려줌: { pos: 지표 낙하점, t: 걸리는 시간(초) } 또는 { orbit: true } (궤도에 남음 = 우주 쓰레기)
-export function predictImpact(pos, vel, kind) {
+export function predictImpact(pos, vel, kind, dragPerMass) {
   const o = orbit(pos, vel);
   if (o.escape || o.pe > PLANET.atm) return { orbit: true, ap: o.ap, pe: o.pe };
   let p = pos.slice(), v = vel.slice(), t = 0;
-  const kk = 0.9 * AREA / 1000 * (kind === 'balloon' ? 40 : 1);
+  const kk = dragPerMass != null ? dragPerMass : 0.9 * AREA / 1000 * (kind === 'balloon' ? 40 : 1);
   while (t < 30000) {
     const r = V.len(p), alt = r - PLANET.R;
     if (alt <= 0) return { pos: V.mul(p, PLANET.R / r), t };
@@ -159,7 +256,7 @@ export function buildSegments(design) {
   const segs = [];
   for (let k = nTop - 1; k >= 0; k--) {
     const idx = stack.map((_, i) => i).filter(i => tops[i] === k), ids = idx.map(i => stack[i]);
-    const seg = { ids, idx, dry: 0, liquid: 0, liquidMax: 0, solids: [], boosters: [], fins: [] };
+    const seg = { ids, idx, dry: 0, liquid: 0, liquidMax: 0, solids: [], boosters: [], fins: [], reserve: 0 };
     for (const id of ids) {
       const p = PARTS[id]; seg.dry += p.mass;
       if (p.kind === 'tank') { seg.liquid += p.fuel; seg.liquidMax += p.fuel; }
@@ -169,6 +266,9 @@ export function buildSegments(design) {
       if (PARTS[r.id].kind === 'fin') { seg.fins.push({ id: r.id, n: r.n, at: r.at }); seg.dry += PARTS[r.id].mass * r.n; }
       else seg.boosters.push({ id: r.id, n: r.n, at: r.at, fuel: PARTS[r.id].fuel, max: PARTS[r.id].fuel, attached: true });
     }
+    // 착륙 다리·격자 날개가 있으면 다시 쓰는 단: 연료 15%를 착륙용으로 남김
+    if (seg.fins.some(f => ['legs', 'grid'].includes(PARTS[f.id].look)) && seg.ids.some(id => PARTS[id].kind === 'engine')) seg.reserve = seg.liquidMax * RESERVE;
+    for (const b of seg.boosters) b.reserve = PARTS[b.id].look === 'core' ? b.max * RESERVE : 0;
     segs.push(seg);
   }
   return segs;
@@ -252,7 +352,7 @@ export class Rocket3D {
     this.q = 0; this.aoa = 0; this.heat = 0; this.wind = [0, 0, 0]; this.windSpeed = 0;
     this.version = 0;
     this.deployedSat = null;
-    this.impacts = []; this.stageNo = 0;   // 분리된 부품 낙하 예측
+    this.impacts = []; this.stageNo = 0; this.landings = [];   // 분리된 부품 낙하 예측
     this.fail = null;
     this.science = { points: 0, done: new Set() };
     this.unstableWarned = false; this.fuelOut = false;
@@ -284,13 +384,13 @@ export class Rocket3D {
   get isSatellite() { return this.segs.length === 1 && isSatSeg(this.segs[0]); }
   get stageFuelFrac() {
     const s = this.active; if (!s) return 0;
-    let max = s.liquidMax, cur = s.liquid;
+    let max = s.liquidMax - s.reserve, cur = s.liquid - s.reserve;
     for (const x of s.solids) { max += x.max; cur += x.fuel; }
-    for (const b of s.boosters) if (b.attached) { max += b.max * b.n; cur += b.fuel * b.n; }
-    return max ? cur / max : 0;
+    for (const b of s.boosters) if (b.attached) { max += (b.max - (b.reserve || 0)) * b.n; cur += (b.fuel - (b.reserve || 0)) * b.n; }
+    return max ? Math.max(0, cur / max) : 0;
   }
   get anyFuel() {
-    return this.segs.some(s => (s.liquid > 0 && s.ids.some(id => PARTS[id].kind === 'engine')) || s.solids.some(x => x.fuel > 0) || s.boosters.some(b => b.attached && b.fuel > 0));
+    return this.segs.some(s => (s.liquid > s.reserve && s.ids.some(id => PARTS[id].kind === 'engine')) || s.solids.some(x => x.fuel > 0) || s.boosters.some(b => b.attached && b.fuel > (b.reserve || 0)));
   }
   get nextAction() {
     if (this.state !== 'pad' && this.state !== 'flying') return 'none';
@@ -310,6 +410,7 @@ export class Rocket3D {
     return this._ak;
   }
   addImpact(d, name) {
+    if (d.lander) { this.impacts.push({ name, landing: true, lander: d.lander, pos: d.lander.target, at: this.t }); this.log(name + ' 착륙 비행 시작: ' + (d.lander.mode === 'rtls' ? '발사장 옆 착륙장으로 돌아와요' : '바다의 해상 착륙선에 내려요'), 'info'); return; }
     const pr = predictImpact(d.pos, d.vel, d.kind);
     this.impacts.push({ name, ...pr, at: this.t, alt: this.alt, speed: this.speed });
   }
@@ -354,8 +455,13 @@ export class Rocket3D {
       for (const b of s.boosters) {
         if (!b.attached) continue;
         b.attached = false;
-        this.sideDirs(b.n).forEach(dir => this.debris.push({ design: { stack: [b.id], radial: [] }, pos: V.add(this.pos, V.mul(dir, 1.3)), vel: V.add(this.vel, V.mul(dir, 4)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.8, life: 50 }));
-        this.addImpact(this.debris[this.debris.length - 1], '측면 부스터 ' + b.n + '개');
+        const pb = PARTS[b.id];
+        this.sideDirs(b.n).forEach((dir, k) => {
+          const d = { design: { stack: [b.id], radial: [] }, pos: V.add(this.pos, V.mul(dir, 1.3)), vel: V.add(this.vel, V.mul(dir, 4)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.8, life: 50 };
+          this.debris.push(d);
+          if (b.reserve && b.fuel > 0) { d.life = Infinity; d.spin = 0; d.name = '측면 부스터 ' + (k + 1); d.lander = makeLander(d, { dry: pb.mass, fuel: b.fuel, thrust: pb.thrust, isp: (pb.ispSL + pb.ispV) / 2, name: d.name, slot: k }); this.addImpact(d, d.name); }
+          else if (k === 0) this.addImpact(d, '측면 부스터 ' + b.n + '개');
+        });
       }
       this.version++; this.log('측면 부스터 분리!');
       return a;
@@ -367,6 +473,11 @@ export class Rocket3D {
       const fins = seg.fins.map(f => ({ at: seg.idx.indexOf(f.at), id: f.id, n: f.n }));
       this.debris.push({ design: { stack: seg.ids, radial: fins }, pos: this.pos.slice(), vel: V.sub(this.vel, V.mul(this.fwd, 2)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.5, life: 60 });
       this.stageNo++;
+      if (seg.reserve && seg.liquid > 0) {
+        const d = this.debris[this.debris.length - 1], eng = seg.ids.filter(id => PARTS[id].kind === 'engine').map(id => PARTS[id]);
+        d.life = Infinity; d.spin = 0; d.name = this.stageNo + '단';
+        d.lander = makeLander(d, { dry: seg.dry, fuel: seg.liquid, thrust: eng.reduce((a, p) => a + p.thrust, 0), isp: eng.reduce((a, p) => a + (p.ispSL + p.ispV) / 2, 0) / Math.max(1, eng.length), area: Math.max(1, ...seg.ids.map(id => (PARTS[id].w || 1) ** 2)), name: d.name });
+      }
       this.addImpact(this.debris[this.debris.length - 1], a === 'deploy' ? '위성을 올린 마지막 단' : this.stageNo + '단');
       this.pos = V.add(this.pos, V.mul(this.fwd, h));
       this.version++;
@@ -476,15 +587,15 @@ export class Rocket3D {
       let flow = 0;
       for (const id of s.ids) {
         const p = PARTS[id];
-        if (p.kind === 'engine' && s.liquid > 0 && throttle > 0) {
+        if (p.kind === 'engine' && s.liquid > s.reserve && throttle > 0) {
           const f = p.thrust * throttle * (p.ion ? Math.pow(Math.max(0, 1 - press), 6) : 1);
           this.thrustNow += f; flow += p.thrust * throttle / (isp(p) * G0) * (p.ion ? 0.5 : 1);
         }
       }
-      s.liquid = Math.max(0, s.liquid - flow * dt);
+      if (flow > 0) { s.liquid = Math.max(s.reserve, s.liquid - flow * dt); if (s.reserve && s.liquid <= s.reserve && !s.meco) { s.meco = true; this.log('1단 엔진 정지(MECO): 착륙용 연료를 남겼어요. 단을 분리하세요!', 'info'); } }
       for (const x of s.solids) if (x.fuel > 0) { const p = PARTS[x.id]; this.thrustNow += p.thrust; x.fuel = Math.max(0, x.fuel - p.thrust / (isp(p) * G0) * dt); if (!x.fuel) this.log('고체 로켓 연소 종료'); }
       this.coreThrust = this.thrustNow;
-      for (const b of s.boosters) if (b.attached && b.fuel > 0) { const p = PARTS[b.id]; this.thrustNow += p.thrust * b.n; b.fuel = Math.max(0, b.fuel - p.thrust / (isp(p) * G0) * dt); if (!b.fuel) this.log('측면 부스터 연소 끝 — 분리하세요!'); }
+      for (const b of s.boosters) if (b.attached && b.fuel > (b.reserve || 0)) { const p = PARTS[b.id]; this.thrustNow += p.thrust * b.n; b.fuel = Math.max(b.reserve || 0, b.fuel - p.thrust / (isp(p) * G0) * dt); if (b.fuel <= (b.reserve || 0)) this.log(b.reserve ? '측면 부스터 엔진 정지 — 착륙용 연료를 남겼어요. 분리하세요!' : '측면 부스터 연소 끝 — 분리하세요!'); }
       F = V.mul(this.fwd, this.thrustNow);
     }
     // 태양 돛: 우주에서 햇빛이 미는 힘 (행성 그림자 안에서는 없음)
@@ -581,6 +692,12 @@ export class Rocket3D {
 
   stepDebris(d, dt) {
     const steps = Math.max(1, Math.round(dt / 0.05)), h = dt / steps;
+    if (d.lander) {
+      for (let i = 0; i < steps && !d.lander.result; i++) landerStep(d, h);
+      if (d.lander.result && !d.lander.logged) { d.lander.logged = true; const R = d.lander.result; this.landings.push({ name: d.name, ...R }); this.log(R.ok ? d.name + ' 착륙 성공! (' + R.where + ', ' + R.speed.toFixed(1) + ' m/s)' : d.name + ' 착륙 실패: ' + R.reason, R.ok ? 'good' : 'bad', R.ok ? { fact: '로켓을 다시 쓰면 발사 비용이 크게 줄어요. 팰컨 9 1단은 2015년에 처음 착륙했어요.' } : { boomAt: d.pos.slice() }); }
+      if (d.lander.result && d.lander.result.ok) d.life -= dt;
+      return;
+    }
     for (let i = 0; i < steps; i++) {
       const r = V.len(d.pos), alt = r - PLANET.R;
       if (alt <= 0) { d.life = 0; return; }
@@ -645,7 +762,7 @@ export class Autopilot {
       if (ob && ob.pe > 50000) { rk.throttle = 0; this.phase = 'done'; }
     }
     const act = rk.nextAction;
-    if (act === 'boosters' && rk.active.boosters.every(b => !b.attached || b.fuel <= 0)) rk.stage();
+    if (act === 'boosters' && rk.active.boosters.every(b => !b.attached || b.fuel <= (b.reserve || 0))) rk.stage();
     else if (act === 'stage' && (rk.stageFuelFrac === 0 || this.phase === 'done')) rk.stage();
     else if (act === 'deploy' && this.phase === 'done') rk.stage();
   }
@@ -657,10 +774,10 @@ export const REAL_ROCKETS = [
   { key: "nuri", name: "누리호", design: {"stack": ["fairing", "satObs", "dec", "tankM", "engV", "dec", "tankL@13", "engL", "dec", "tankXL@13", "tankL@13", "engLx4"], "radial": [{"at": 11, "id": "fin", "n": 4}], "livery": {"body": "#f3f4f6", "accent": "#1b1d22", "flag": "KR"}, "flame": "kerosene"}, facts: {"country": "대한민국", "first": "2021년 (2022년 첫 성공)", "height": "47.2 m", "stages": "3단", "engines": "1단 75톤 엔진 4개 묶음 · 2단 1개 · 3단 7톤 1개"}, story: "우리 기술로 만든 첫 우주발사체예요. 1단은 75톤급 엔진 4개를 한 몸처럼 움직이게 묶었어요(클러스터링). 나로우주센터 제2발사대에서 발사해요." },
   { key: "soyuz", name: "소유즈", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "decTruss", "tankM", "engL", "decTruss", "tankXL", "tankL", "engSx4"], "radial": [{"at": 10, "id": "boosterCone", "n": 4}, {"at": 12, "id": "fin", "n": 4}], "livery": {"body": "#c3c8bb", "accent": "#e06a2c", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련·러시아", "first": "1966년", "height": "약 46 m", "stages": "부스터 4개 + 2단 + 3단", "engines": "부스터·중심 단 모두 4개 노즐"}, story: "역사상 가장 많이 발사된 로켓 계열(R-7)이에요. 지금도 우주비행사를 실어 날라요. 부스터 4개가 떨어지며 십자가처럼 퍼지는 모습을 '코롤료프 십자가'라고 불러요." },
   { key: "saturn", name: "새턴 5", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "dec", "tankL@13", "engV", "dec", "tankL@20", "engLx5", "dec", "tankXL@20", "engLx5"], "radial": [{"at": 14, "id": "fin", "n": 4}], "livery": {"body": "#f4f4f2", "accent": "#151515", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (NASA)", "first": "1967년", "height": "110.6 m", "stages": "3단", "engines": "1단 F-1 엔진 5개 · 2단 J-2 5개 · 3단 J-2 1개"}, story: "아폴로 11호(1969)를 달로 보낸 로켓이에요. 13번 발사되는 동안 우주비행사를 한 번도 잃지 않았어요. 맨 위의 뾰족한 탑은 비상 탈출 타워예요." },
-  { key: "n1", name: "N1", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engS", "decTruss", "tankM@13-10", "engVx4", "decTruss", "tankL@16-13", "engVx7", "decTruss", "tankXL@20-16", "engSx30"], "radial": [{"at": 14, "id": "gridFin", "n": 4}], "livery": {"body": "#e6e3da", "accent": "#2b2b2b", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련", "first": "1969년 (시험 4번)", "height": "105 m", "stages": "4단 + 달 착륙선", "engines": "1단 NK-15 엔진 30개"}, story: "소련이 달에 가려고 만든 거대한 로켓이에요. 1단 엔진 30개를 함께 맞추기가 너무 어려워 4번 모두 실패했어요. 엔진을 많이 묶을수록 제어가 어렵다는 교훈을 남겼어요." },
+  { key: "n1", name: "N1", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engS", "decTruss", "tankM@13-10", "engVx4", "decTruss", "tankL@16-13", "engVx7", "decTruss", "tankXL@20-16", "engSx30"], "radial": [{"at": 14, "id": "fin", "n": 4}], "livery": {"body": "#e6e3da", "accent": "#2b2b2b", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련", "first": "1969년 (시험 4번)", "height": "105 m", "stages": "4단 + 달 착륙선", "engines": "1단 NK-15 엔진 30개"}, story: "소련이 달에 가려고 만든 거대한 로켓이에요. 1단 엔진 30개를 함께 맞추기가 너무 어려워 4번 모두 실패했어요. 엔진을 많이 묶을수록 제어가 어렵다는 교훈을 남겼어요." },
   { key: "f9", name: "팰컨 9", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2010년", "height": "약 70 m", "stages": "2단", "engines": "1단 멀린 엔진 9개 · 2단 1개"}, story: "1단이 다시 돌아와 착륙해서 수십 번이나 다시 써요(2015년 첫 착륙). 격자 날개로 방향을 잡고 착륙 다리를 펴고 내려와요." },
-  { key: "fh", name: "팰컨 헤비", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "boosterCore", "n": 2, "rot": 0.785}, {"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2018년", "height": "약 70 m", "stages": "1단 코어 3개 + 2단", "engines": "코어마다 멀린 9개, 모두 27개"}, story: "팰컨 9 1단 세 개를 나란히 묶은 로켓이에요. 양옆 부스터 2개가 동시에 돌아와 나란히 착륙하는 장면으로 유명해요." },
-  { key: "starship", name: "스타십", design: {"stack": ["ssNose", "tankL@16", "engVx3", "decTruss", "tankXL@16", "tankL@16", "engSx33"], "radial": [{"at": 1, "id": "flap", "n": 2}, {"at": 4, "id": "gridFin", "n": 4}], "livery": {"body": "#b8bdc4", "accent": "#18191b", "flag": "NONE", "finish": "steel"}, "flame": "methane"}, facts: {"country": "미국 (스페이스X)", "first": "2023년 (시험 비행)", "height": "약 120 m", "stages": "2단 (슈퍼 헤비 + 스타십)", "engines": "슈퍼 헤비 랩터 33개 · 스타십 6개"}, story: "지금까지 만든 로켓 중 가장 크고 힘이 세요. 스테인리스강으로 만들고 두 단 모두 다시 쓰는 것이 목표예요. 2024년에는 돌아오는 슈퍼 헤비를 발사탑의 '젓가락' 팔로 붙잡았어요." },
+  { key: "fh", name: "팰컨 헤비", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "boosterCore", "n": 2, "rot": 0.785}, {"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2018년", "height": "약 70 m", "stages": "1단 코어 3개 + 2단", "engines": "코어마다 멀린 9개, 모두 27개"}, story: "팰컨 9 1단 세 개를 나란히 묶은 로켓이에요. 양옆 부스터 2개가 동시에 돌아와 나란히 착륙하는 장면으로 유명해요. 가운데 코어는 더 빠르고 멀리 날아가서 착륙이 훨씬 어려워요." },
+  { key: "starship", name: "스타십", design: {"stack": ["ssNose", "tankL@16", "engLx3", "decTruss", "tankXL@16", "tankL@16", "engSx33"], "radial": [{"at": 1, "id": "flap", "n": 2}, {"at": 4, "id": "gridFin", "n": 4}], "livery": {"body": "#b8bdc4", "accent": "#18191b", "flag": "NONE", "finish": "steel"}, "flame": "methane"}, facts: {"country": "미국 (스페이스X)", "first": "2023년 (시험 비행)", "height": "약 120 m", "stages": "2단 (슈퍼 헤비 + 스타십)", "engines": "슈퍼 헤비 랩터 33개 · 스타십 6개"}, story: "지금까지 만든 로켓 중 가장 크고 힘이 세요. 스테인리스강으로 만들고 두 단 모두 다시 쓰는 것이 목표예요. 2024년에는 돌아오는 슈퍼 헤비를 발사탑의 '젓가락' 팔로 붙잡았어요." },
 ];
 const L = (body, accent, flag) => ({ body, accent, flag });
 export const EXAMPLES3D = [
