@@ -145,6 +145,7 @@ export function normalizeDesign(d) {
     livery: { body: '#f1f2f4', accent: '#141518', flag: 'KR', ...(d.livery || {}) },
     flame: d.flame || 'kerosene',
     launch: d.launch || 'pad',
+    real: d.real || null,   // 실제 로켓 예제에서 시작했는지 (미션 판정용)
   };
 }
 function topSegIndex(stack) {

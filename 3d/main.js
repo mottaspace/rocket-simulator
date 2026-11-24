@@ -5,11 +5,12 @@ import { RenderPass } from './vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
-import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES } from './physics3d.js';
+import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES, EXAMPLES3D, REAL_ROCKETS } from './physics3d.js';
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
 import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType } from './rocketModel.js';
 import { Builder } from './builder.js';
 import { RocketSound } from './sound.js';
+import { MISSIONS, evaluate, loadProgress, saveStars, unlocked, totalStars } from './missions.js';
 
 const { PARTS } = window.Parts;
 const $ = id => document.getElementById(id);
@@ -144,6 +145,8 @@ function satView(s) {
 let mode = 'build';
 let rk = null, design = null, designName = '', autopilot = null, ended = false, map = false, warpIdx = 0, lastEvent = 0, shipSatId = null;
 const WARPS = [1, 2, 4, 10, 50, 200];
+let missionId = store.get('rocket3d.mission', MISSIONS[0].id);
+let mstate = { auto: false, sat: null, maxAp: 0, doneShown: false, stars: 0 };
 
 const builder = new Builder({ renderer, canvas, env, getTier: () => tierKey, onLaunch: (d, name) => briefing(d, name), sheet: (h, a) => sheet(h, a) });
 let weatherKey = store.get('rocket3d.weather', 'clear'), weather = makeWeather(weatherKey);
@@ -152,6 +155,7 @@ function setMode(m) {
   mode = m; builder.active = m === 'build';
   document.body.classList.toggle('mode-build', m === 'build');
   document.body.classList.toggle('mode-flight', m === 'flight');
+  if (m === 'build') updateBuildChip();
   closeSheet();
   resize();
 }
@@ -193,6 +197,7 @@ function startFlight(d, name) {
   rebuildModel();
   fitPadToRocket();
   countdown = null; ignT = -1; wasIgnited = false;
+  mstate = { auto: false, sat: null, maxAp: 0, doneShown: false, stars: 0 };
   cam.dist = Math.max(30, rocketModel.height * 2.6); cam.el = 0.12; cam.az = 0.5;
   setMode('flight');
 }
@@ -283,6 +288,7 @@ function setThrottle(v) {
 $('thMax').onclick = () => setThrottle(1);
 $('thCut').onclick = () => setThrottle(0);
 function setSas(m) {
+  if (m === 'auto' && mode === 'flight') mstate.auto = true;
   if (m === 'auto') autopilot = new Autopilot(rk); else { autopilot = null; if (rk) rk.sas = m; }
   document.querySelectorAll('.sas button').forEach(b => b.classList.toggle('on', b.dataset.sas === m));
 }
@@ -585,17 +591,19 @@ function flushEvents() {
     const s = { id: 'my-' + Date.now(), name: (designName || '내 위성').slice(0, 20), type, owner: '나', epoch: uniNow(), r: rk.pos.slice(), v: rk.vel.slice() };
     sats.push(s); store.set('rocket3d.sats', sats); shipSatId = s.id;
     const el = satElements(s.r, s.v, s.epoch);
+    if (el) mstate.sat = { pe: el.pe, ap: el.ap };
     setTimeout(() => sheet('<h2>🛰 위성 배치 성공!</h2><p><b>' + esc(s.name) + '</b>이(가) 궤도에 올랐어요.</p><div class="bench-grid"><div><span>근지점</span><b>' + fmtDist(el.pe) + '</b></div><div><span>원지점</span><b>' + fmtDist(el.ap) + '</b></div><div><span>한 바퀴</span><b>' + fmtN(el.period / 60, 1) + ' 분</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div></div><p class="muted">위성은 이 기기에 저장되어, 다음에 접속해도 실제 시간에 맞춰 계속 돌고 있어요.</p>',
       [{ label: '새 로켓 조립', fn: () => setMode('build') }, { label: '🛰 궤도 보기', primary: true, fn: () => { map = true; $('mapBtn').classList.add('on'); fitMap(); } }]), 1200);
   }
 }
 
 function showResult() {
-  const dg = rk.diagnose();
-  sheet('<h2>' + dg.title + '</h2>' + dg.lines.map(l => '<p>' + esc(l) + '</p>').join('') + (dg.fact ? '<p class="fact">💡 ' + esc(dg.fact) + '</p>' : '') +
+  const dg = rk.diagnose(), mres = missionResultHtml();
+  sheet(mres.html + '<h2>' + dg.title + '</h2>' + dg.lines.map(l => '<p>' + esc(l) + '</p>').join('') + (dg.fact ? '<p class="fact">💡 ' + esc(dg.fact) + '</p>' : '') +
     (impactViews.length ? '<b>분리된 부품이 떨어진 곳</b><table class="rank"><thead><tr><th>부품</th><th class="n">떨어진 곳</th></tr></thead><tbody>' + impactViews.map(v => '<tr><td>' + esc(v.imp.name) + '</td><td class="n">' + esc(v.info.text) + '</td></tr>').join('') + '</tbody></table><p class="muted">실제 발사도 단이 떨어질 바다를 미리 정해 배와 비행기가 피하도록 알려요.</p>' : '') +
     (rk.science.points ? '<p>🔬 과학 점수 <b>' + rk.science.points + '점</b> (' + [...rk.science.done].length + '개 실험)</p>' : '') + '<div class="bench-grid"><div><span>최고 고도</span><b>' + fmtDist(rk.max.alt) + '</b></div><div><span>최고 속도</span><b>' + fmtN(rk.max.vel) + ' m/s</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div><div><span>최대 동압</span><b>' + fmtN(rk.max.q / 1000) + ' kPa</b></div></div><p class="muted">날씨: ' + weather.icon + ' ' + weather.name + '</p>',
-    [{ label: '조립으로', fn: () => setMode('build') }, { label: '다시 비행', primary: true, fn: () => startFlight() }]);
+    mres.next ? [{ label: '다시 비행', fn: () => startFlight() }, { label: '조립으로', fn: () => setMode('build') }, { label: '다음 미션 ▶', primary: true, fn: () => { setMode('build'); openMission(mres.next); } }]
+      : [{ label: '조립으로', fn: () => setMode('build') }, { label: '다시 비행', primary: true, fn: () => startFlight() }]);
 }
 
 function resize() {
@@ -606,6 +614,81 @@ function resize() {
   builder.resize(w, h);
 }
 window.addEventListener('resize', resize);
+
+// ───────── 단계별 미션 ─────────
+const curMission = () => MISSIONS.find(m => m.id === missionId) || null;
+const starText = n => '★'.repeat(n) + '☆'.repeat(3 - n);
+function missionCtx() {
+  const d = design || {};
+  return {
+    rk, auto: mstate.auto, weather: weather.key, real: d.real || null, sat: mstate.sat, maxAp: mstate.maxAp, impacts: impactViews,
+    hasFins: (d.radial || []).some(r => PARTS[r.id].kind === 'fin'),
+    maxCluster: Math.max(1, ...(d.stack || []).map(id => PARTS[id].cluster || 1), ...(d.radial || []).map(r => PARTS[r.id].look === 'core' ? 9 : 1)),
+  };
+}
+function updateMission() {
+  const m = curMission(), chip = $('fMission');
+  chip.hidden = !m || m.soon;
+  if (!m || m.soon) return;
+  const ctx = missionCtx(), r = evaluate(m, ctx);
+  chip.classList.toggle('done', r.done);
+  const txt = '🎯 ' + m.title + ' · ' + (r.done ? '성공! ' + starText(r.stars) : m.progress(ctx));
+  if (chip.textContent !== txt) chip.textContent = txt;
+  if (r.done && r.stars > mstate.stars) { mstate.stars = r.stars; saveStars(m.id, r.stars); }
+  if (r.done && !mstate.doneShown) {
+    mstate.doneShown = true; sound.beep(true);
+    setTimeout(() => toast('🎯 미션 성공: ' + m.title + '!\n' + m.learn, false, 5200), 400);
+  }
+}
+function missionResultHtml() {
+  const m = curMission();
+  if (!m || m.soon) return { html: '' };
+  const r = evaluate(m, missionCtx());
+  if (r.done) saveStars(m.id, r.stars);
+  const i = MISSIONS.indexOf(m), nx = MISSIONS[i + 1], next = r.done && nx && !nx.soon ? nx.id : null;
+  const html = '<div class="mission-res"><p class="eyebrow">🎯 미션 ' + (i + 1) + ' · ' + esc(m.title) + '</p>' +
+    (r.done ? '<div class="stars-big">' + starText(r.stars) + '</div>' : '<p class="fail">아직 목표를 이루지 못했어요: ' + esc(m.goal) + '</p>') +
+    '<ul class="mcheck"><li>' + (r.done ? '✅' : '⬜') + ' ' + esc(m.goal) + '</li>' + m.bonus.map((b, k) => '<li>' + (r.bonus[k] && r.done ? '⭐' : '☆') + ' ' + esc(b.text) + '</li>').join('') + '</ul></div><hr>';
+  return { html, next };
+}
+function recDesign(m) {
+  if (!m.rec) return null;
+  const [kind, key] = m.rec.split(':');
+  if (kind === 'real') { const e = REAL_ROCKETS.find(x => x.key === key); return e && { design: { ...JSON.parse(JSON.stringify(e.design)), real: e.key }, name: e.name }; }
+  const e = EXAMPLES3D.find(x => x.name === key); return e && { design: JSON.parse(JSON.stringify(e.design)), name: e.name };
+}
+function setMission(id) { missionId = id; store.set('rocket3d.mission', id); updateBuildChip(); }
+function updateBuildChip() {
+  const m = curMission(), chip = $('bMissionChip'), prog = loadProgress();
+  chip.hidden = !m || m.soon;
+  if (m && !m.soon) chip.textContent = '🎯 미션 ' + (MISSIONS.indexOf(m) + 1) + ': ' + m.goal + ' ' + starText(prog[m.id] || 0);
+}
+function openMissions() {
+  const prog = loadProgress();
+  sheet('<h2>🎯 미션</h2><p class="muted">미션을 해내면 별을 받아요. 보너스 목표까지 해내면 별 3개! 별을 1개 이상 받으면 다음 미션이 열려요. 모은 별: <b>' + totalStars(prog) + ' / ' + MISSIONS.filter(m => !m.soon).length * 3 + '</b></p><div class="mlist">' +
+    MISSIONS.map((m, i) => {
+      const open = unlocked(i, prog) && !m.soon;
+      return `<button data-m="${m.id}" class="${open ? '' : 'lock'} ${m.id === missionId ? 'on' : ''}"><span class="mi">${open ? m.icon : '🔒'}</span><span><b>${i + 1}. ${esc(m.title)}</b><small>${m.soon ? '곧 열려요' : esc(m.goal)}</small></span><span class="ms">${m.soon ? '' : starText(prog[m.id] || 0)}</span></button>`;
+    }).join('') + '</div>', [{ label: '닫기' }]);
+  $('sheetBody').querySelectorAll('.mlist button').forEach(b => b.onclick = () => {
+    const i = MISSIONS.findIndex(m => m.id === b.dataset.m), m = MISSIONS[i];
+    if (m.soon) { toast('부스터 재착륙 미션은 곧 열려요!', false, 2000); return; }
+    if (!unlocked(i, loadProgress())) { toast('앞 미션에서 별을 1개 이상 받으면 열려요', true, 2200); return; }
+    openMission(m.id);
+  });
+}
+function openMission(id) {
+  const i = MISSIONS.findIndex(m => m.id === id), m = MISSIONS[i], prog = loadProgress(), rec = recDesign(m);
+  sheet('<h2>' + m.icon + ' 미션 ' + (i + 1) + ': ' + esc(m.title) + '</h2><div class="stars-big">' + starText(prog[m.id] || 0) + '</div>' +
+    '<ul class="mcheck"><li>🎯 <b>' + esc(m.goal) + '</b></li>' + m.bonus.map(b => '<li>⭐ 보너스: ' + esc(b.text) + '</li>').join('') + '</ul>' +
+    '<p class="fact">💡 ' + esc(m.learn) + '</p>' + (rec ? '<p class="muted">추천 로켓: ' + esc(rec.name) + ' (내 로켓으로 도전해도 돼요)</p>' : ''),
+    [{ label: '목록', fn: () => setTimeout(openMissions, 0) }].concat(rec ? [{ label: '추천 로켓으로 시작', fn: () => { setMission(m.id); builder.set(rec.design, rec.name); toast('🎯 미션 시작: ' + m.title, false, 2000); } }] : [])
+      .concat([{ label: '이 미션 도전', primary: true, fn: () => { setMission(m.id); toast('🎯 미션 시작: ' + m.title + '\n지금 로켓으로 도전해요', false, 2200); } }]));
+}
+$('bMission').onclick = openMissions;
+$('bMissionChip').onclick = () => openMission(missionId);
+$('fMission').onclick = () => { const m = curMission(); if (m) toast('🎯 ' + m.goal + '\n보너스: ' + m.bonus.map(b => b.text).join(' · '), false, 3600); };
+updateBuildChip();
 
 // ───────── 메인 루프 ─────────
 let last = performance.now(), first = true;
@@ -697,6 +780,8 @@ function flightFrame(dtReal) {
   if (!map && rk.q > 2000) { const sh = Math.min(0.25, rk.q / 300000 + rk.windSpeed / 400) * (weather.gust || 0.2); camera.position.x += (Math.random() - 0.5) * sh; camera.position.y += (Math.random() - 0.5) * sh; }
   rocketGroup.visible = !map;
   const ob = updateOrbitView();
+  if (ob && !ob.escape && rk.lifted) mstate.maxAp = Math.max(mstate.maxAp, ob.ap); else if (ob && ob.escape) mstate.maxAp = Infinity;
+  updateMission();
   render(scene, camera);
   drawDial(axes);
   updateHud(ob, warp);

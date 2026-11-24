@@ -95,7 +95,7 @@ export class Builder {
       EXAMPLES3D.map((e, i) => `<option value="${i}">${esc(e.name)}</option>`).join('') + '</optgroup>';
     ex.onchange = () => {
       if (ex.value === '') return;
-      if (ex.value[0] === 'r') { const e = REAL_ROCKETS[+ex.value.slice(1)]; this.set(JSON.parse(JSON.stringify(e.design)), e.name); this.showReal(e); }
+      if (ex.value[0] === 'r') { const e = REAL_ROCKETS[+ex.value.slice(1)]; this.set({ ...JSON.parse(JSON.stringify(e.design)), real: e.key }, e.name); this.showReal(e); }
       else { const e = EXAMPLES3D[+ex.value]; this.set(JSON.parse(JSON.stringify(e.design)), e.name); }
       ex.value = '';
     };
