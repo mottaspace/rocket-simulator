@@ -68,6 +68,44 @@ function makeLine(color, opacity) {
 }
 const orbitLine = makeLine(0x5ab0ff, 1); scene.add(orbitLine);
 
+// ───────── 분리된 부품 낙하 지점 (빨간 ✕ + 낙하 예상 구역 원) ─────────
+const impactTex = (() => {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 64; const g = cv.getContext('2d');
+  g.lineCap = 'round';
+  for (const [w, c] of [[16, 'rgba(0,0,0,.55)'], [9, '#ff4b3e']]) { g.strokeStyle = c; g.lineWidth = w; g.beginPath(); g.moveTo(14, 14); g.lineTo(50, 50); g.moveTo(50, 14); g.lineTo(14, 50); g.stroke(); }
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
+})();
+const impactGroup = new THREE.Group();
+let impactViews = [];
+const PAD_UP = [0, 1, 0];
+const DIRS8 = ['북', '북동', '동', '남동', '남', '남서', '서', '북서'];
+function impactInfo(imp) {
+  if (imp.orbit) return { text: '궤도에 남음 (우주 쓰레기)', where: '우주' };
+  const n = V.norm(imp.pos), hz = horizon([0, PLANET.R, 0]), d = V.sub(imp.pos, [0, PLANET.R, 0]);
+  const dist = PLANET.R * Math.acos(Math.max(-1, Math.min(1, V.dot(n, PAD_UP))));
+  const ang = (Math.atan2(V.dot(d, hz.east), V.dot(d, hz.north)) * 180 / Math.PI + 360) % 360;
+  const where = world.isWater(n) ? '바다' : '육지';
+  return { dist, dir: DIRS8[Math.round(ang / 45) % 8], where, text: (dist < 1000 ? '발사장 근처' : '발사장 ' + DIRS8[Math.round(ang / 45) % 8] + '쪽 ' + fmtDist(dist)) + ' ' + where };
+}
+function addImpactView(imp) {
+  const info = impactInfo(imp), v = { imp, info };
+  if (!imp.orbit) {
+    const n = V.norm(imp.pos), lift = PLANET.R + 80;
+    v.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: impactTex, sizeAttenuation: false, depthTest: false, fog: false }));
+    v.sprite.scale.set(0.045, 0.045, 1); v.sprite.renderOrder = 11; v.sprite.position.set(n[0] * lift, n[1] * lift, n[2] * lift);
+    // 낙하 예상 구역: 멀리서 떨어질수록 넓게 (실제 발사 때 미리 알리는 '낙하 예상 구역'처럼)
+    const rr = Math.max(1500, info.dist * 0.07), a = V.norm(V.cross(n, Math.abs(n[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0])), b = V.cross(n, a), pts = [];
+    for (let i = 0; i <= 64; i++) { const t = i / 64 * Math.PI * 2, q = V.mul(V.norm(V.add(V.mul(n, PLANET.R), V.add(V.mul(a, Math.cos(t) * rr), V.mul(b, Math.sin(t) * rr)))), lift); pts.push(new THREE.Vector3(...q)); }
+    v.ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xff4b3e, fog: false, transparent: true, opacity: 0.85 }));
+    v.ring.frustumCulled = false;
+    impactGroup.add(v.sprite, v.ring);
+  }
+  impactViews.push(v);
+  const when = imp.orbit ? '' : ' · ' + (imp.t >= 60 ? Math.floor(imp.t / 60) + '분 ' : '') + Math.round(imp.t % 60) + '초 뒤';
+  setTimeout(() => toast('📍 ' + imp.name + ' 낙하 예상: ' + info.text + when + (imp.orbit ? '\n분리된 단이 궤도 속도라 떨어지지 않고 계속 돌아요.' : '\n관제 지도에 빨간 ✕로 표시했어요.'), false, 4200), 1600);
+}
+function clearImpacts() { impactViews.forEach(v => { if (v.sprite) { impactGroup.remove(v.sprite, v.ring); v.ring.geometry.dispose(); v.sprite.material.dispose(); } }); impactViews = []; }
+
 // ───────── 후처리 (블룸) ─────────
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(scene, camera);
@@ -150,6 +188,7 @@ function startFlight(d, name) {
   autopilot = null; ended = false; lastEvent = 0; warpIdx = 0; map = false; shipSatId = null;
   $('mapBtn').classList.remove('on');
   debrisModels.forEach(m => scene.remove(m.group)); debrisModels.clear();
+  clearImpacts(); if (impactGroup.parent !== world.root) world.root.add(impactGroup);
   setSas('off'); setThrottle(1);
   rebuildModel();
   fitPadToRocket();
@@ -450,11 +489,16 @@ function addLabel(p, cls, text) {
 function updateOrbitView() {
   labelsEl.innerHTML = '';
   const ob = rk.lifted ? rk.orbit() : null;
-  orbitLine.visible = map && !!ob && !ob.flat && !ob.escape;
+  // 위성을 분리한 뒤에는 비행 화면에서도 위성의 이동 궤도(초록)를 보여 줌
+  const satMode = rk.isSatellite && !!rk.deployedSat;
+  orbitLine.visible = (map || satMode) && !!ob && !ob.flat && !ob.escape;
+  orbitLine.material.color.setHex(satMode ? 0x7dff9b : 0x5ab0ff);
   marker.visible = map;
   const center = V.mul(rk.pos, -1);
-  if (map) {
-    const k = mapCam.dist * 0.012; marker.scale.set(k, k, 1);
+  if (map) { const k = mapCam.dist * 0.012; marker.scale.set(k, k, 1); }
+  // 낙하 지점 표시
+  for (const v of impactViews) if (v.sprite && (map || rk.alt < 200000)) addLabel(V.add(v.imp.pos, center), 'impact', v.imp.name + ' 낙하 · ' + (v.info.dist < 1000 ? '발사장 근처' : fmtDist(v.info.dist)));
+  if (map || satMode) {
     if (orbitLine.visible) {
       fillOrbit(orbitLine, { ...ob, isOrbit: true }, center);
       const at = nu => { const r = ob.p / (1 + ob.e * Math.cos(nu)); return V.add(center, V.add(V.mul(ob.P, r * Math.cos(nu)), V.mul(ob.Q, r * Math.sin(nu)))); };
@@ -519,7 +563,7 @@ function updateHud(ob, warp) {
     : act === 'stage' ? '남은 단 ' + rk.segs.length + ' · 추력 ' + fmtN(rk.thrustNow / 1000) + ' kN'
     : rk.chute === 'armed' ? '낙하산: 250 m/s 이하·고도 20 km 아래에서 펴져요'
     : rk.balloon === 'rising' ? '풍선 상승 중 · 18 km에서 자동 분리 (바람 ' + fmtN(rk.windSpeed) + ' m/s)'
-    : rk.isSatellite ? '인공위성 공전 중' + (rk.sailOpen ? ' · 태양 돛 펼침' : '')
+    : rk.isSatellite ? '인공위성 공전 중' + (ob && !ob.escape && ob.a > 0 ? ' · 한 바퀴 ' + fmtN(2 * Math.PI * Math.sqrt(ob.a ** 3 / PLANET.mu) / 60, 1) + '분 · 초록 선이 위성의 길' : '') + (rk.sailOpen ? ' · 태양 돛 펼침' : '')
     : rk.ignited ? (rk.q > 3000 ? '동압 ' + fmtN(rk.q / 1000) + ' kPa' + (rk.q > 60000 ? ' ⚠' : '') + ' · ' : '') + (rk.alt < 30000 ? '바람 ' + fmtN(rk.windSpeed) + ' m/s · ' : '') + fmtN(rk.acc, 1) + ' G' + (rk.science.points ? ' · 🔬' + rk.science.points : '')
     : '날씨 ' + weather.icon + ' ' + weather.name + ' · 바람 ' + fmtN(weather.wind0) + ' m/s';
   const ap = $('apLabel'); ap.hidden = !autopilot; if (autopilot) ap.textContent = '자동 비행: ' + autopilot.label;
@@ -534,6 +578,7 @@ function flushEvents() {
     else if (/분리|부스터|페어링/.test(e.text)) sound.boom(0.4, Math.exp(-Math.max(0, rk.alt) / 9000));
     if (e.boom) for (let i = 0; i < 8; i++) world.emit(rk.pos, rk.vel, V.norm([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]), horizon(rk.pos).up, 100, 6);
   }
+  while (impactViews.length < rk.impacts.length) addImpactView(rk.impacts[impactViews.length]);
   // 위성 배치 성공 → 우주 목록에 저장
   if (rk.deployedSat && rk.deployedSat.ok && !shipSatId) {
     const type = PARTS[rk.deployedSat.ids.find(id => PARTS[id].kind === 'sat')].sat;
@@ -541,13 +586,14 @@ function flushEvents() {
     sats.push(s); store.set('rocket3d.sats', sats); shipSatId = s.id;
     const el = satElements(s.r, s.v, s.epoch);
     setTimeout(() => sheet('<h2>🛰 위성 배치 성공!</h2><p><b>' + esc(s.name) + '</b>이(가) 궤도에 올랐어요.</p><div class="bench-grid"><div><span>근지점</span><b>' + fmtDist(el.pe) + '</b></div><div><span>원지점</span><b>' + fmtDist(el.ap) + '</b></div><div><span>한 바퀴</span><b>' + fmtN(el.period / 60, 1) + ' 분</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div></div><p class="muted">위성은 이 기기에 저장되어, 다음에 접속해도 실제 시간에 맞춰 계속 돌고 있어요.</p>',
-      [{ label: '관제 지도', fn: () => { map = true; $('mapBtn').classList.add('on'); fitMap(true); } }, { label: '새 로켓 조립', primary: true, fn: () => setMode('build') }]), 1200);
+      [{ label: '새 로켓 조립', fn: () => setMode('build') }, { label: '🛰 궤도 보기', primary: true, fn: () => { map = true; $('mapBtn').classList.add('on'); fitMap(); } }]), 1200);
   }
 }
 
 function showResult() {
   const dg = rk.diagnose();
   sheet('<h2>' + dg.title + '</h2>' + dg.lines.map(l => '<p>' + esc(l) + '</p>').join('') + (dg.fact ? '<p class="fact">💡 ' + esc(dg.fact) + '</p>' : '') +
+    (impactViews.length ? '<b>분리된 부품이 떨어진 곳</b><table class="rank"><thead><tr><th>부품</th><th class="n">떨어진 곳</th></tr></thead><tbody>' + impactViews.map(v => '<tr><td>' + esc(v.imp.name) + '</td><td class="n">' + esc(v.info.text) + '</td></tr>').join('') + '</tbody></table><p class="muted">실제 발사도 단이 떨어질 바다를 미리 정해 배와 비행기가 피하도록 알려요.</p>' : '') +
     (rk.science.points ? '<p>🔬 과학 점수 <b>' + rk.science.points + '점</b> (' + [...rk.science.done].length + '개 실험)</p>' : '') + '<div class="bench-grid"><div><span>최고 고도</span><b>' + fmtDist(rk.max.alt) + '</b></div><div><span>최고 속도</span><b>' + fmtN(rk.max.vel) + ' m/s</b></div><div><span>비행 시간</span><b>' + fmtN(rk.t) + ' 초</b></div><div><span>최대 동압</span><b>' + fmtN(rk.max.q / 1000) + ' kPa</b></div></div><p class="muted">날씨: ' + weather.icon + ' ' + weather.name + '</p>',
     [{ label: '조립으로', fn: () => setMode('build') }, { label: '다시 비행', primary: true, fn: () => startFlight() }]);
 }

@@ -65,6 +65,24 @@ export function orbit(r, v) {
   return { e, p, a, eps, P, Q, ap: ra - PLANET.R, pe: rp - PLANET.R, escape: eps >= 0, flat: hl < 1 };
 }
 
+// 분리된 부품이 어디에 떨어질지 미리 계산 (중력 + 공기저항, 바람은 무시)
+// 돌려줌: { pos: 지표 낙하점, t: 걸리는 시간(초) } 또는 { orbit: true } (궤도에 남음 = 우주 쓰레기)
+export function predictImpact(pos, vel, kind) {
+  const o = orbit(pos, vel);
+  if (o.escape || o.pe > PLANET.atm) return { orbit: true, ap: o.ap, pe: o.pe };
+  let p = pos.slice(), v = vel.slice(), t = 0;
+  const kk = 0.9 * AREA / 1000 * (kind === 'balloon' ? 40 : 1);
+  while (t < 30000) {
+    const r = V.len(p), alt = r - PLANET.R;
+    if (alt <= 0) return { pos: V.mul(p, PLANET.R / r), t };
+    const h = alt > PLANET.atm ? 2 : alt > 12000 ? 0.4 : 0.15;
+    const g = PLANET.mu / (r * r), sp = V.len(v), k = 0.5 * density(Math.max(0, alt)) * sp * kk;
+    v = V.add(v, V.mul(V.add(V.mul(p, -g / r), V.mul(v, -k)), h));
+    p = V.add(p, V.mul(v, h)); t += h;
+  }
+  return { orbit: true, ap: o.ap, pe: o.pe };
+}
+
 export function satElements(r, v, epoch) {
   const o = orbit(r, v);
   if (o.escape) return null;
@@ -233,6 +251,7 @@ export class Rocket3D {
     this.q = 0; this.aoa = 0; this.heat = 0; this.wind = [0, 0, 0]; this.windSpeed = 0;
     this.version = 0;
     this.deployedSat = null;
+    this.impacts = []; this.stageNo = 0;   // 분리된 부품 낙하 예측
     this.fail = null;
     this.science = { points: 0, done: new Set() };
     this.unstableWarned = false; this.fuelOut = false;
@@ -284,6 +303,10 @@ export class Rocket3D {
     return 'none';
   }
   orbit() { return orbit(this.pos, this.vel); }
+  addImpact(d, name) {
+    const pr = predictImpact(d.pos, d.vel, d.kind);
+    this.impacts.push({ name, ...pr, at: this.t, alt: this.alt, speed: this.speed });
+  }
   log(text, kind, extra) { this.events.push({ t: this.t, text, kind: kind || 'info', ...(extra || {}) }); }
 
   sideDirs(n) {
@@ -299,6 +322,7 @@ export class Rocket3D {
       if (i >= 0) {
         const id = s.ids[i]; s.ids.splice(i, 1); s.idx.splice(i, 1); s.dry -= PARTS[id].mass;
         this.debris.push({ design: { stack: [id], radial: [] }, pos: V.add(this.pos, V.mul(this.fwd, this.height)), vel: V.add(this.vel, V.mul(this.sideDirs(1)[0], 6)), fwd: this.fwd.slice(), spin: 0.8, life: 40, kind });
+        if (kind === 'fairing') this.addImpact(this.debris[this.debris.length - 1], '페어링');
         this.version++;
         return true;
       }
@@ -325,6 +349,7 @@ export class Rocket3D {
         if (!b.attached) continue;
         b.attached = false;
         this.sideDirs(b.n).forEach(dir => this.debris.push({ design: { stack: [b.id], radial: [] }, pos: V.add(this.pos, V.mul(dir, 1.3)), vel: V.add(this.vel, V.mul(dir, 4)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.8, life: 50 }));
+        this.addImpact(this.debris[this.debris.length - 1], '측면 부스터 ' + b.n + '개');
       }
       this.version++; this.log('측면 부스터 분리!');
       return a;
@@ -335,6 +360,8 @@ export class Rocket3D {
       const h = seg.ids.reduce((x, id) => x + PARTS[id].h, 0);
       const fins = seg.fins.map(f => ({ at: seg.idx.indexOf(f.at), id: f.id, n: f.n }));
       this.debris.push({ design: { stack: seg.ids, radial: fins }, pos: this.pos.slice(), vel: V.sub(this.vel, V.mul(this.fwd, 2)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.5, life: 60 });
+      this.stageNo++;
+      this.addImpact(this.debris[this.debris.length - 1], a === 'deploy' ? '위성을 올린 마지막 단' : this.stageNo + '단');
       this.pos = V.add(this.pos, V.mul(this.fwd, h));
       this.version++;
       if (a === 'deploy') {

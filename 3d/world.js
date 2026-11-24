@@ -513,6 +513,9 @@ export class World {
 
   setWeather(w) { this.weather = w; this.buildClouds(); }
 
+  // 지표 방향(단위 벡터)이 바다인지 (NASA 바다 지도)
+  isWater(dir) { return !!this.earth && sampleImg(this.earth.waterImg, toEarthDir(dir))[0] > 128; }
+
   // 로켓 크기에 맞춰 발사탑·이렉터 조정 (h: 높이, rCore: 몸통 반지름, rMax: 최대 반지름)
   fitPad(h, rCore, rMax) { this.fitArgs = [h, rCore, rMax]; this.complex.fit(h, rCore, rMax); }
 
