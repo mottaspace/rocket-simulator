@@ -665,12 +665,12 @@ function flightFrame(dtReal) {
   orient(rocketGroup, rk.fwd, rk.pos);
   const vac = Math.min(1, Math.max(0, alt / PLANET.atm));
   for (const m of [flameMat, ionFlameMat]) { m.uniforms.uTime.value += dtReal; m.uniforms.uVac.value = vac; }
-  const boosterOn = rk.thrustNow - rk.coreThrust > 0, coreOn = rk.coreThrust > 0;
+  const boosterOn = rk.thrustNow - rk.coreThrust > 0, coreOn = rk.coreThrust > 0, nCore = Math.max(1, flames.filter(f => f.userData.kind === 'core').length);
   const ionOn = coreOn && rk.active && rk.active.ids.some(id => PARTS[id].ion);
   for (const f of flames) {
     const k = f.userData.kind, on = k === 'booster' ? boosterOn : k === 'ion' ? ionOn : coreOn && !ionOn;
     f.visible = on;
-    if (on) { const s = f.userData.size, L = (k === 'booster' ? 7 : k === 'ion' ? 5 : 6 + rk.coreThrust / 30000) * s * (1 + vac * 0.8), w = s * (1 + vac * 1.8); f.scale.set(w, L, w); }
+    if (on) { const s = f.userData.size, L = (k === 'booster' ? 7 : k === 'ion' ? 5 : 6 + rk.coreThrust / nCore / 30000) * s * (1 + vac * 0.8), w = s * (1 + vac * 1.8); f.scale.set(w, L, w); }
   }
   canopy.visible = rk.chute === 'open';
   const alive = new Set(rk.debris);

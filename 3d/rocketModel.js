@@ -128,6 +128,29 @@ function buildSail(open) {
   return g;
 }
 
+// 엔진 클러스터 배치: 몸통 반지름을 1로 본 위치들과 엔진 하나의 축소 비율
+const BELL_R = id => id === 'engH' ? 0.62 : id === 'engL' || id === 'engV' ? 0.6 : 0.46;
+export const NOZZLE_SIZE = id => id === 'engH' ? 1.5 : id === 'engL' ? 1.25 : id === 'engV' ? 0.9 : PARTS[id].ion ? 0.6 : 1;
+const ring = (k, r, off = 0) => Array.from({ length: k }, (_, i) => { const a = off + i / k * Math.PI * 2; return [Math.cos(a) * r, Math.sin(a) * r]; });
+const LAYOUTS = {
+  1: [[0, 0]], 2: ring(2, 0.5), 3: ring(3, 0.52, Math.PI / 2), 4: ring(4, 0.55, Math.PI / 4),
+  5: [[0, 0], ...ring(4, 0.62, Math.PI / 4)], 7: [[0, 0], ...ring(6, 0.64)], 9: [[0, 0], ...ring(8, 0.68)],
+  30: [...ring(6, 0.3), ...ring(24, 0.8)], 33: [...ring(3, 0.13), ...ring(10, 0.47), ...ring(20, 0.83)],
+};
+const layoutCache = {};
+export function clusterLayout(id) {
+  const p = PARTS[id], n = p.cluster || 1, base = p.base || id;
+  const key = base + n; if (layoutCache[key]) return layoutCache[key];
+  const pos = LAYOUTS[n] || [[0, 0]];
+  let room = 1.05;
+  for (let i = 0; i < pos.length; i++) {
+    room = Math.min(room, 1.08 - Math.hypot(...pos[i]));
+    for (let j = i + 1; j < pos.length; j++) room = Math.min(room, Math.hypot(pos[i][0] - pos[j][0], pos[i][1] - pos[j][1]) / 2);
+  }
+  const s = Math.min(1, room * RAD / BELL_R(base));
+  return (layoutCache[key] = { pos, s, base });
+}
+
 function partMesh(id, seg, P, opt) {
   const p = PARTS[id], h = p.h, g = new THREE.Group();
   switch (p.kind) {
@@ -157,6 +180,15 @@ function partMesh(id, seg, P, opt) {
       break;
     }
     case 'engine': {
+      if (p.cluster > 1) {
+        // 같은 엔진 여러 개를 줄여서 원형으로 배치 + 위쪽 추력 구조(엔진 받침판)
+        const L = clusterLayout(id), one = partMesh(L.base, p.cluster >= 9 ? Math.max(10, seg >> 1) : seg, P, opt);
+        const top = h * L.s * 0.55;   // 엔진 윗부분을 덮는 추력 구조(엔진 받침 치마)
+        g.add(cyl(RAD * 0.97, RAD, h - top, seg, 'darkMetal', top));
+        g.add(cyl(RAD * 0.99, RAD * 0.99, 0.08, seg, P.accent, top));
+        for (const [x, z] of L.pos) { const e = one.clone(); e.scale.setScalar(L.s); e.position.set(x * RAD, 0, z * RAD); g.add(e); }
+        break;
+      }
       if (p.ion) {
         g.add(cyl(RAD * 0.8, RAD * 0.7, h * 0.5, seg, 'darkMetal', h * 0.5));
         g.add(cyl(0.34, 0.34, h * 0.5, seg, 'steel', 0, true));
@@ -220,7 +252,10 @@ export function buildRocket(design, quality, opt = {}) {
     m.position.y = y; m.userData = { stack: i };
     group.add(m); parts.push({ mesh: m, stack: i });
     ys[i] = y;
-    if (i === d.stack.length - 1 && (PARTS[id].kind === 'engine' || PARTS[id].kind === 'srb')) nozzles.push([0, y, 0, id === 'engH' ? 1.5 : id === 'engL' ? 1.25 : id === 'engV' ? 0.9 : PARTS[id].ion ? 0.6 : 1, PARTS[id].ion ? 'ion' : 'core']);
+    if (i === d.stack.length - 1 && PARTS[id].cluster > 1) {
+      const L = clusterLayout(id), sz = NOZZLE_SIZE(L.base) * Math.max(0.3, L.s * 1.1);
+      for (const [x, z] of L.pos) nozzles.push([x * RAD, y, z * RAD, sz, 'core']);
+    } else if (i === d.stack.length - 1 && (PARTS[id].kind === 'engine' || PARTS[id].kind === 'srb')) nozzles.push([0, y, 0, NOZZLE_SIZE(id), PARTS[id].ion ? 'ion' : 'core']);
     y += PARTS[id].h;
   }
   // 위 단의 이온 엔진도 불꽃 표시

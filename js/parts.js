@@ -33,6 +33,19 @@
     tankXL:{ name: '연료탱크 XL', short: '탱크 XL', mass: 900, fuel: 8000, h: 9.0, kind: 'tank', desc: '아주 큰 탱크' },
     fin:   { name: '안정 날개', short: '날개', mass: 40, h: 1.6, kind: 'fin', radial: true, desc: '화살 깃처럼 로켓이 바람에 흔들리지 않게 잡아 줘요. 맨 아래 부품 옆에 붙이세요.' },
   };
+  // 엔진 클러스터(여러 개를 한 단에 묶기): 'engLx9'처럼 개수를 붙인 숨은 부품을 자동으로 만듦
+  // 실제 예: 팰컨 9 1단 9개, 새턴 5 1단 5개, 소유즈 4개, N1 1단 30개, 슈퍼 헤비 33개
+  const CLUSTER_N = [1, 2, 3, 4, 5, 7, 9, 30, 33];
+  for (const id of Object.keys(PARTS)) {
+    const p = PARTS[id];
+    if (p.kind !== 'engine' || p.ion) continue;
+    for (const n of CLUSTER_N.slice(1)) {
+      PARTS[id + 'x' + n] = Object.assign({}, p, {
+        name: p.name + ' ×' + n, short: p.short + ' ×' + n, mass: p.mass * n, thrust: p.thrust * n, base: id, cluster: n, hidden: true,
+        desc: p.short + ' ' + n + '개를 한 단에 묶었어요(클러스터). 힘도 무게도 ' + n + '배예요. 엔진 하나가 고장 나도 나머지로 버틸 수 있어요.',
+      });
+    }
+  }
   const PALETTE_ORDER = ['pod', 'chute', 'tankS', 'tankM', 'tankL', 'engS', 'engL', 'srb', 'dec'];
 
   const EXAMPLES = [
@@ -214,5 +227,5 @@
     return ranges;
   }
 
-  global.Parts = { PARTS, PALETTE_ORDER, EXAMPLES, WIDTH, splitStages, segInfo, analyze, totalHeight, drawPart, drawStack };
+  global.Parts = { PARTS, CLUSTER_N, PALETTE_ORDER, EXAMPLES, WIDTH, splitStages, segInfo, analyze, totalHeight, drawPart, drawStack };
 })(window);

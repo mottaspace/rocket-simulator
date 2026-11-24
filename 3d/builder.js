@@ -4,7 +4,7 @@ import { analyze3d, normalizeDesign, EXAMPLES3D, FLAMES } from './physics3d.js';
 import { buildRocket, setFlameType } from './rocketModel.js';
 import { FLAGS, flagThumb } from './flags.js';
 
-const { PARTS } = window.Parts;
+const { PARTS, CLUSTER_N } = window.Parts;
 const $ = id => document.getElementById(id);
 const fmtN = (n, d = 0) => Number(n).toLocaleString('ko-KR', { maximumFractionDigits: d, minimumFractionDigits: d });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -69,6 +69,7 @@ export class Builder {
     const l = new THREE.DirectionalLight(0xffffff, 2.5); l.position.set(3, 5, 4); sc.add(l);
     const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
     for (const id of Object.keys(PARTS)) {
+      if (PARTS[id].hidden) continue;
       const k = PARTS[id].kind;
       const d = k === 'fin' ? { stack: ['tankS'], radial: [{ at: 0, id, n: 3 }] } : k === 'fairing' ? { stack: ['fairing', 'satCom'], radial: [] } : { stack: [id], radial: [] };
       const obj = buildRocket(d, 'high').group;
@@ -96,6 +97,7 @@ export class Builder {
     $('bUp').onclick = () => this.move(-1);
     $('bDown').onclick = () => this.move(1);
     $('bDel').onclick = () => this.remove();
+    $('bCluster').onclick = () => this.openCluster();
     $('bSym').onclick = e => { const b = e.target.closest('button'); if (!b) return; this.setSym(+b.dataset.n); };
     $('bClear').onclick = () => this.set({ stack: [], radial: [], livery: this.design.livery, flame: this.design.flame }, '나만의 로켓');
     $('bLaunch').onclick = () => { const a = analyze3d(this.design); if (a.ok) this.onLaunch(JSON.parse(JSON.stringify(this.design)), this.name || '나만의 로켓'); };
@@ -279,6 +281,27 @@ export class Builder {
     else { const i = this.sel.stack; d.stack.splice(i, 1); d.radial = d.radial.filter(r => r.at !== i).map(r => ({ ...r, at: r.at > i ? r.at - 1 : r.at })); }
     this.sel = null; this.save(); this.rebuild();
   }
+  // 선택한 엔진을 여러 개 묶기 (클러스터)
+  selEngine() {
+    const i = this.sel && this.sel.stack; if (i == null) return null;
+    const id = this.design.stack[i], p = PARTS[id]; if (!p || p.kind !== 'engine' || p.ion) return null;
+    return { i, id, base: p.base || id, n: p.cluster || 1 };
+  }
+  openCluster() {
+    const e = this.selEngine(); if (!e) return;
+    const NOTE = { 1: '하나만', 2: '나란히', 3: '세모', 4: '네모 · 누리호', 5: '새턴 5 1단', 7: '가운데+6', 9: '팰컨 9 1단', 30: 'N1 1단', 33: '슈퍼 헤비' };
+    const html = '<h2>🔥 엔진 묶기 (클러스터)</h2><p class="muted">' + esc(PARTS[e.base].short) + '을(를) 몇 개 묶을까요? 힘과 무게가 개수만큼 늘어나요.</p><div class="cluster-grid">' +
+      CLUSTER_N.map(n => `<button data-n="${n}" class="${n === e.n ? 'on' : ''}"><b>×${n}</b><small>${NOTE[n]}</small></button>`).join('') + '</div>' +
+      '<p class="fact">💡 큰 엔진 하나를 새로 만드는 것보다 검증된 엔진 여러 개를 묶는 편이 쉬워요. 누리호 1단도 75톤 엔진 4개를 묶었어요. 대신 엔진이 많을수록 함께 맞춰 움직이기가 어려워요(N1 로켓의 고민).</p>';
+    this.sheet(html, [{ label: '닫기' }]);
+    $('sheetBody').querySelectorAll('.cluster-grid button').forEach(b => b.onclick = () => {
+      const n = +b.dataset.n, cur = this.selEngine(); if (!cur) return;
+      this.design.stack[cur.i] = n === 1 ? cur.base : cur.base + 'x' + n;
+      $('sheetBody').querySelectorAll('.cluster-grid button').forEach(x => x.classList.toggle('on', x === b));
+      this.save(); this.rebuild();
+    });
+  }
+
   setSym(n) {
     this.sym = n;
     if (this.sel && this.sel.radial != null) { this.design.radial[this.sel.radial].n = n; this.save(); this.rebuild(); }
@@ -345,6 +368,7 @@ export class Builder {
     const isStack = this.sel && this.sel.stack != null;
     $('bUp').disabled = $('bDown').disabled = !isStack;
     $('bDel').disabled = !this.sel;
+    const eng = this.selEngine(); $('bCluster').hidden = !eng; if (eng) $('bCluster').querySelector('b').textContent = '×' + eng.n;
     const n = this.sel && this.sel.radial != null ? this.design.radial[this.sel.radial].n : this.sym;
     $('bSym').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.n === n));
   }

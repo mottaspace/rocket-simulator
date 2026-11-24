@@ -76,3 +76,14 @@ body.mode-flight .bd { display: none !important; }
 .hud-grid .time b { color: #ffd27a; }
 .hud-grid .time.count b { color: #ff7a5c; font-size: 16px; }
 #soundBtn.off { opacity: .55; }
+
+/* 엔진 클러스터 */
+.b3d-tools > button.cluster { display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 10px; line-height: 1.1; color: #ffd27a; border-color: #ffb020; }
+.b3d-tools > button.cluster b { font-size: 15px; color: #fff; }
+.b3d-tools > button.cluster[hidden] { display: none; }
+.cluster-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 10px 0; }
+.cluster-grid button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; }
+.cluster-grid button b { font-size: 18px; }
+.cluster-grid button small { font-size: 11px; color: var(--ink-2); }
+.cluster-grid button.on { background: #ffb020; color: #1a1000; border-color: #ffb020; }
+.cluster-grid button.on small { color: #3a2600; }
