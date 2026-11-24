@@ -11,6 +11,8 @@ const AREA = Math.PI * 0.625 * 0.625;
 const CHUTE_AREA = 400, CHUTE_CD = 1.3, CHUTE_SAFE_SPEED = 250, CHUTE_SAFE_ALT = 20000;
 const ROT_RATE = 0.9, SAFE_LANDING = 12, RADIAL_DEC_MASS = 50;
 // 실패 기준 (모의 비행으로 맞춘 값 — 자동 비행의 최대값보다 넉넉하게)
+// 엄빌리칼 타워(K134) 위치: 발사장 기준 x(서쪽), 한 변의 절반, 높이(로켓에 맞춰 launchpad.js가 바꿈)
+export const PAD_TOWER = { x: -7.4, z: 0, half: 3, h: 34 };
 export const LIMITS = { maxQ: 110000, sideLoad: 14000, heatNoShield: 450, heatShield: 3200, unstableAoa: 0.22, unstableQ: 7000 };
 const BALLOON_TOP = 18000, BALLOON_CLIMB = 30, RAIL_SPEED = 110, SAIL_FORCE = 150;
 
@@ -502,11 +504,10 @@ export class Rocket3D {
     const shield = this.hasPart('shield');
     if (this.heat > (shield ? LIMITS.heatShield : LIMITS.heatNoShield) && this.vertSpeed < 0) return this.destroy('heat', '재진입 열에 기체가 타 버렸어요! (' + Math.round(this.heat) + ' °C)', '우주에서 돌아올 때는 공기가 압축되며 엄청 뜨거워져요. 캡슐 아래에 열 방패를 달고, 너무 가파르게 들어오지 않아야 해요.');
     // 발사탑 충돌 (강풍에 밀려서)
-    if (nalt < 34 && this.lifted) {
-      const towerWorld = [-4.4, PLANET.R, 0];
-      const d = V.sub(this.pos, towerWorld), hz = horizon(this.pos);
-      const horiz = V.len(V.sub(d, V.mul(hz.up, V.dot(d, hz.up))));
-      if (horiz < 1.7) return this.destroy('tower', '바람에 밀려 발사탑에 부딪혔어요!', '그래서 실제 발사는 지상 바람이 약할 때만 해요. 강풍 속에서는 로켓이 옆으로 밀려 위험해요.');
+    if (nalt < PAD_TOWER.h && this.lifted) {
+      // 발사장 근처에서는 월드 x·z가 곧 동서·남북 (발사장은 [0, R, 0])
+      const dx = this.pos[0] - PAD_TOWER.x, dz = this.pos[2] - PAD_TOWER.z;
+      if (Math.abs(dx) < PAD_TOWER.half + 0.6 && Math.abs(dz) < PAD_TOWER.half + 0.6) return this.destroy('tower', '바람에 밀려 발사탑에 부딪혔어요!', '그래서 실제 발사는 지상 바람이 약할 때만 해요. 강풍 속에서는 로켓이 옆으로 밀려 위험해요.');
     }
     if (nalt > PLANET.atm && !this.reachedSpace) { this.reachedSpace = true; this.log('우주에 도착했어요!', 'good'); }
     if (nalt > PLANET.atm && !this.orbited) { const ob = this.orbit(); if (!ob.escape && ob.pe > PLANET.atm) { this.orbited = true; this.log(this.hasPart('pod') && this.segs.some(s2 => s2.ids.includes('catPod')) ? '궤도 진입 성공! 냥~ 무중력이다냥!' : '궤도 진입 성공!', 'good'); } }

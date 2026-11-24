@@ -69,3 +69,9 @@ body.mode-flight .bd { display: none !important; }
 .qrow { display: flex; gap: 6px; margin: 8px 0 4px; flex-wrap: wrap; }
 .qrow button.on { background: var(--sel); color: #04121f; border-color: var(--sel); }
 @media (max-height: 640px) { .stick { width: 96px; height: 96px; } .stick-knob { width: 40px; height: 40px; margin: -20px 0 0 -20px; } }
+
+/* 비행 시간 (T+) */
+.hud-grid { grid-template-columns: 1.1fr repeat(4, 1fr); }
+.hud-grid .time b { color: #ffd27a; }
+.hud-grid .time.count b { color: #ff7a5c; font-size: 16px; }
+#soundBtn.off { opacity: .55; }

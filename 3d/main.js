@@ -9,6 +9,7 @@ import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, norm
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
 import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType } from './rocketModel.js';
 import { Builder } from './builder.js';
+import { RocketSound } from './sound.js';
 
 const { PARTS } = window.Parts;
 const $ = id => document.getElementById(id);
@@ -131,6 +132,14 @@ function rebuildModel() {
   modelVersion = rk.version;
 }
 
+// 로켓 크기를 재서 발사탑·이렉터·지상고정장치를 맞춤
+function fitPadToRocket() {
+  const g = rocketModel.group, par = g.parent; if (par) par.remove(g);
+  g.updateMatrixWorld(true); const box = new THREE.Box3().setFromObject(g); if (par) par.add(g);
+  const rMax = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), Math.abs(box.min.z), Math.abs(box.max.z));
+  world.fitPad(rocketModel.height, 0.625, Math.min(rMax, 3));
+}
+
 let modelSail = false, modelBalloon = 'none', lastStrike = -1;
 function startFlight(d, name) {
   if (d) { design = normalizeDesign(d); designName = name || '나만의 로켓'; }
@@ -143,6 +152,8 @@ function startFlight(d, name) {
   debrisModels.forEach(m => scene.remove(m.group)); debrisModels.clear();
   setSas('off'); setThrottle(1);
   rebuildModel();
+  fitPadToRocket();
+  countdown = null; ignT = -1; wasIgnited = false;
   cam.dist = Math.max(30, rocketModel.height * 2.6); cam.el = 0.12; cam.az = 0.5;
   setMode('flight');
 }
@@ -206,7 +217,7 @@ const keys = new Set();
 window.addEventListener('keydown', e => {
   if (mode !== 'flight' || !$('sheetBg').hidden || e.target.tagName === 'INPUT') return;
   keys.add(e.code);
-  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) rk.stage(); }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) doStage(); }
   else if (e.code === 'KeyZ') setThrottle(1);
   else if (e.code === 'KeyX') setThrottle(0);
   else if (e.code.startsWith('Shift')) setThrottle(rk.throttle + 0.1);
@@ -237,7 +248,40 @@ function setSas(m) {
   document.querySelectorAll('.sas button').forEach(b => b.classList.toggle('on', b.dataset.sas === m));
 }
 document.querySelectorAll('.sas button').forEach(b => b.onclick = () => setSas(b.dataset.sas));
-$('stageBtn').onclick = () => rk.stage();
+$('stageBtn').onclick = () => doStage();
+
+// ───────── 발사 카운트다운·소리·비행 시간 ─────────
+const sound = new RocketSound();
+sound.on = store.get('rocket3d.sound', true);
+$('soundBtn').classList.toggle('off', !sound.on); $('soundBtn').textContent = sound.on ? '🔊' : '🔇';
+$('soundBtn').onclick = () => { sound.setOn(!sound.on); store.set('rocket3d.sound', sound.on); $('soundBtn').classList.toggle('off', !sound.on); $('soundBtn').textContent = sound.on ? '🔊' : '🔇'; };
+window.addEventListener('pointerdown', () => sound.unlock(), { capture: true });
+let countdown = null, ignT = -1, wasIgnited = false;
+const COUNT_FROM = 10, KO_NUM = ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구', '십'];
+function doStage() {
+  sound.unlock();
+  if (rk.nextAction === 'launch') { if (!countdown) startCountdown(); return; }
+  rk.stage();
+}
+function startCountdown() { countdown = { left: COUNT_FROM + 0.999, shown: COUNT_FROM + 1 }; }
+function tickCountdown(dt) {
+  if (!countdown) return;
+  countdown.left -= dt;
+  const n = Math.floor(countdown.left);
+  if (n < countdown.shown) {
+    countdown.shown = n;
+    if (n > 0) {
+      if (n === COUNT_FROM) toast('발사 ' + n + '초 전! 카운트다운 시작', false, 1500);
+      else if (n <= 5) toast(String(n), false, 900);
+      if (!sound.say(KO_NUM[n])) sound.beep(false);
+    }
+    else { if (!sound.say('발사!', { rate: 1.1, pitch: 1.05 })) sound.beep(true); countdown = null; if (rk.nextAction === 'launch') { if (autopilot) rk.throttle = 1; rk.stage(); } }
+  }
+}
+function fmtClock(sec) {
+  const s = Math.floor(sec), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = s % 60, p = v => String(v).padStart(2, '0');
+  return h ? h + ':' + p(m) + ':' + p(ss) : p(m) + ':' + p(ss);
+}
 $('mapBtn').onclick = () => { map = !map; $('mapBtn').classList.toggle('on', map); if (map) fitMap(); };
 $('warpBtn').onclick = () => { warpIdx = (warpIdx + 1) % WARPS.length; };
 function fitMap(extra) {
@@ -486,6 +530,8 @@ function flushEvents() {
   while (lastEvent < rk.events.length) {
     const e = rk.events[lastEvent++];
     if (e.kind !== 'info' || /분리|점화|낙하산|부스터|페어링|풍선|사출/.test(e.text)) toast(e.text + (e.fact && e.kind !== 'bad' ? '\n' + e.fact : ''), e.kind === 'bad', e.fact ? 5200 : 0);
+    if (e.boom) sound.boom(1.5, Math.exp(-Math.max(0, rk.alt) / 9000));
+    else if (/분리|부스터|페어링/.test(e.text)) sound.boom(0.4, Math.exp(-Math.max(0, rk.alt) / 9000));
     if (e.boom) for (let i = 0; i < 8; i++) world.emit(rk.pos, rk.vel, V.norm([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]), horizon(rk.pos).up, 100, 6);
   }
   // 위성 배치 성공 → 우주 목록에 저장
@@ -542,7 +588,9 @@ function flightFrame(dtReal) {
   if (!paused) {
     const kx = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0), ky = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
     rk.tiltDir = V.add(V.mul(axes.R, joy[0] || kx), V.mul(axes.F, joy[1] || ky));
-    if (autopilot) autopilot.update();
+    tickCountdown(dtReal);
+    if (autopilot && rk.nextAction === 'launch') { if (!countdown) startCountdown(); }
+    else if (autopilot) autopilot.update();
     rk.update(dtReal * warp);
     clockExtra += dtReal * (warp - 1) * 1000;
   }
@@ -553,6 +601,19 @@ function flightFrame(dtReal) {
   const smokeAmt = (FLAMES[design.flame] || FLAMES.kerosene).smokeAmt;
   if (!paused && rk.thrustNow > 0 && alt < PLANET.atm * 0.8 && Math.random() < smokeAmt) world.emit(rk.pos, rk.vel, rk.fwd, hz.up, alt, Math.max(1, Math.round((tierKey === 'high' ? 4 : tierKey === 'medium' ? 2 : 1) * Math.max(1, smokeAmt))));
   const info = world.update(rk.pos, paused ? 0 : dtReal * Math.min(warp, 4), alt, camera, renderer.domElement.height, map);
+  // 발사장 절차(이렉터 후퇴·엄빌리칼 분리·작업 암·지상고정장치)와 화염유도로 수증기
+  if (!paused && alt < 3000) {
+    for (const m of world.complex.update(dtReal * Math.min(warp, 4), rk)) toast(m, false, 4200);
+    world.steam(world.complex.steam(rk, tierKey === 'high' ? 3 : tierKey === 'medium' ? 2 : 1));
+  }
+  // 점화 순간 '쿵', 비행 시간 표시, 엔진 소리
+  if (rk.ignited && !wasIgnited) { ignT = rk.t; sound.boom(1.1, 1); }
+  wasIgnited = rk.ignited;
+  const tEl = $('hTime');
+  tEl.parentElement.classList.toggle('count', !!countdown);
+  tEl.textContent = countdown ? 'T−' + Math.max(1, Math.floor(countdown.left)) : rk.ignited ? 'T+ ' + fmtClock(rk.t - ignT) : '대기';
+  const ionOnly = rk.coreThrust > 0 && rk.active && rk.active.ids.some(id => PARTS[id].ion);
+  sound.update({ thrust: rk.thrustNow > 0 ? Math.min(1, 0.35 + 0.65 * rk.throttle + (rk.thrustNow - rk.coreThrust > 0 ? 0.3 : 0)) : 0, dens: Math.exp(-Math.max(0, alt) / 9000), dist: map ? 600 : cam.dist, q: rk.q, ion: ionOnly, paused });
 
   // 로켓·불꽃·낙하산
   orient(rocketGroup, rk.fwd, rk.pos);

@@ -1,6 +1,7 @@
 // 실사풍 3D 장면: 셰이더 행성·구름층·하늘·대기, 발사장 지면, 구름 덩어리, 별, 배기 연기
 import * as THREE from './vendor/three.module.min.js';
 import { PLANET, V } from './physics3d.js';
+import { LaunchComplex, PAD_TERRAIN_R } from './launchpad.js';
 
 const DPR = window.devicePixelRatio || 1;
 export const TIERS = {
@@ -418,24 +419,29 @@ export class World {
     this.root.add(this.atmos);
 
     // 발사장 주변 지면 (반경 40 km, 가장자리는 투명하게 행성과 섞임)
-    const [rings, segs] = T.cap, DMAX = 40000;
+    const [rings, segs] = T.cap, DMAX = 40000, R0 = PAD_TERRAIN_R - 0.5;
     const pos = [], col = [], uv = [], idx = [], c = new THREE.Color();
+    const colorAt = (e, n, out) => {
+      const p = surfaceOffset(e, n), f = fbm2(e / 1400 + 50, n / 1400 + 50, 4), g = fbm2(e / 230, n / 230, 3);
+      const dir = this.earth && toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]]));
+      if (this.earth && !(Math.hypot(e, n) < 1500 && sampleImg(this.earth.waterImg, dir)[0] > 128)) {
+        const [r, gg2, b] = sampleImg(this.earth.dayImg, dir);
+        out.setRGB(r / 255, gg2 / 255, b / 255, THREE.SRGBColorSpace); out.multiplyScalar(0.85 + 0.25 * f + 0.1 * g);
+      } else out.setRGB(0.10 + 0.12 * f + 0.05 * g, 0.16 + 0.09 * f, 0.055 + 0.03 * g);
+      return out;
+    };
     for (let i = 0; i <= rings; i++) {
-      const d = DMAX * Math.pow(i / rings, 2.3);
+      const d = R0 + (DMAX - R0) * Math.pow(i / rings, 2.3);
       for (let j = 0; j < segs; j++) {
         const a = j / segs * Math.PI * 2, e = Math.cos(a) * d, n = Math.sin(a) * d, p = surfaceOffset(e, n);
         pos.push(p[0], p[1], p[2]); uv.push(e / 30, n / 30);
-        const f = fbm2(e / 1400 + 50, n / 1400 + 50, 4), g = fbm2(e / 230, n / 230, 3);
         let alpha = Math.min(1, (1 - d / DMAX) * 4);
-        if (d < 55 || (Math.abs(n) < 6 && e < 0 && e > -1500)) c.setRGB(0.36, 0.36, 0.37);   // 발사대 + 진입로
-        else if (this.earth) {
-          // NASA 사진 색 + 잔무늬, 바다면 투명 (발사장 1.5 km 안은 늘 땅)
-          const dir = toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]]));
-          const [r, gg2, b] = sampleImg(this.earth.dayImg, dir), wet = sampleImg(this.earth.waterImg, dir)[0] > 128;
-          c.setRGB(r / 255, gg2 / 255, b / 255, THREE.SRGBColorSpace);
-          c.multiplyScalar(0.85 + 0.25 * f + 0.1 * g);
-          if (wet && d > 1500) alpha = 0;
-        } else c.setRGB(0.10 + 0.12 * f + 0.05 * g, 0.16 + 0.09 * f, 0.055 + 0.03 * g);         // 들판·숲 (선형 색)
+        if (Math.abs(n) < 5 && e < 0 && e > -1500) c.setRGB(0.33, 0.33, 0.34);   // 진입로
+        else {
+          // NASA 사진 색 + 잔무늬, 바다면 투명 (발사장 1.5 km 안은 늘 땅: 들판·숲 색)
+          colorAt(e, n, c);
+          if (this.earth && d > 1500 && sampleImg(this.earth.waterImg, toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]])))[0] > 128) alpha = 0;
+        }
         col.push(c.r, c.g, c.b, alpha);
       }
     }
@@ -448,29 +454,16 @@ export class World {
     gg.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
     gg.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     gg.setIndex(idx); gg.computeVertexNormals();
-    this.ground = new THREE.Mesh(gg, new THREE.MeshStandardMaterial({ vertexColors: true, map: groundTexture(), roughness: 1, transparent: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+    const gtex = groundTexture();
+    this.ground = new THREE.Mesh(gg, new THREE.MeshStandardMaterial({ vertexColors: true, map: gtex, roughness: 1, transparent: true, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
     this.ground.receiveShadow = T.shadows;
     this.ground.renderOrder = 1;
     this.padRoot.add(this.ground);
 
-    // 발사대·발사탑·연기 배출구
-    this.pad = new THREE.Group();
-    const concrete = new THREE.MeshStandardMaterial({ color: 0x7d7f84, roughness: 0.95 });
-    const steel = new THREE.MeshStandardMaterial({ color: 0x9a3b22, roughness: 0.55, metalness: 0.5 });
-    const dark = new THREE.MeshStandardMaterial({ color: 0x2a2c30, roughness: 0.8, metalness: 0.3 });
-    const plat = new THREE.Mesh(new THREE.BoxGeometry(22, 1.2, 22), concrete); plat.position.y = -0.6; plat.receiveShadow = T.shadows; this.pad.add(plat);
-    const trench = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.1, 10), dark); trench.position.set(0, 0.01, 6); this.pad.add(trench);
-    const tower = new THREE.Group();
-    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, 34, 0.22), steel); leg.position.set(x, 17, z); tower.add(leg); }
-    for (let i = 1; i < 17; i++) {
-      const r = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.16, 2.2), steel); r.position.y = i * 2; tower.add(r);
-      const br = new THREE.Mesh(new THREE.BoxGeometry(0.08, 2.8, 0.08), steel); br.position.set(1, i * 2 - 1, 0); br.rotation.x = 0.78; tower.add(br);
-      const bl = br.clone(); bl.position.x = -1; tower.add(bl);
-    }
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.5, 0.8), steel); arm.position.set(2.4, 22, 0); tower.add(arm);
-    tower.position.set(-4.4, 0, 0); tower.traverse(o => { if (o.isMesh) o.castShadow = T.shadows; });
-    this.pad.add(tower);
-    for (const [x, z] of [[9, 9], [-9, 9], [9, -9], [-9, -9]]) { const lp = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.2, 18, 6), steel); lp.position.set(x, 9, z); this.pad.add(lp); }
+    // 발사장 (나로우주센터 제2발사대 형식, launchpad.js)
+    this.complex = new LaunchComplex(T, (x, z, out) => colorAt(x, z, out), gtex);
+    this.complex.fit(...(this.fitArgs || [20, 0.625, 0.625]));
+    this.pad = this.complex.group;
     this.padRoot.add(this.pad);
 
     // 숲 (속도감·크기 비교용)
@@ -519,6 +512,19 @@ export class World {
   }
 
   setWeather(w) { this.weather = w; this.buildClouds(); }
+
+  // 로켓 크기에 맞춰 발사탑·이렉터 조정 (h: 높이, rCore: 몸통 반지름, rMax: 최대 반지름)
+  fitPad(h, rCore, rMax) { this.fitArgs = [h, rCore, rMax]; this.complex.fit(h, rCore, rMax); }
+
+  // 발사장 좌표의 수증기 입자 추가 ([위치, 속도, 수명] 목록)
+  steam(list) {
+    const N = this.tier.particles;
+    for (const [p, v, life] of list) {
+      const k = this.pHead; this.pHead = (this.pHead + 1) % N;
+      for (let a = 0; a < 3; a++) { this.pWorld[k * 3 + a] = p[a] + PAD[a]; this.pVel[k * 3 + a] = v[a]; }
+      this.pMax[k] = this.pLife[k] = life;
+    }
+  }
 
   // 날씨에 따라 뭉게구름·층운·권운·적란운을 배치 (발사장 기준 좌표)
   buildClouds() {
