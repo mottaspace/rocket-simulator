@@ -32,6 +32,15 @@
     engH:  { name: '엔진 · 고래', short: '고래 엔진', mass: 3200, thrust: 620000, ispSL: 272, ispV: 312, h: 2.4, kind: 'engine', desc: '아주 강력한 대형 엔진. 큰 탱크와 함께 써요.' },
     tankXL:{ name: '연료탱크 XL', short: '탱크 XL', mass: 900, fuel: 8000, h: 9.0, kind: 'tank', desc: '아주 큰 탱크' },
     fin:   { name: '안정 날개', short: '날개', mass: 40, h: 1.6, kind: 'fin', radial: true, desc: '화살 깃처럼 로켓이 바람에 흔들리지 않게 잡아 줘요. 맨 아래 부품 옆에 붙이세요.' },
+    // ── 실제 로켓을 닮은 부품 ──
+    ssNose:  { name: '스타십 기수', short: '스타십 기수', mass: 700, h: 3.4, kind: 'nose', look: 'starship', control: true, desc: '스테인리스 기수와 앞날개(플랩). 조종석과 화물칸이 들어 있어요. 돌아올 때 배를 아래로 눕혀 공기로 속도를 줄여요.' },
+    les:     { name: '비상 탈출 타워', short: '탈출 타워', mass: 300, h: 2.8, kind: 'nose', look: 'les', desc: '발사 중 문제가 생기면 작은 로켓으로 캡슐을 끌고 도망쳐요(아폴로·소유즈). 보통은 중간에 버려요.' },
+    flap:    { name: '뒷날개(플랩)', short: '플랩', mass: 80, h: 2.4, kind: 'fin', radial: true, look: 'flap', desc: '스타십의 움직이는 날개. 하늘다이빙하듯 내려올 때 자세를 잡아요.' },
+    gridFin: { name: '격자 날개', short: '격자 날개', mass: 30, h: 0.6, kind: 'fin', radial: true, look: 'grid', desc: '와플처럼 생긴 날개. 1단이 돌아올 때 방향을 잡아요(팰컨 9·슈퍼 헤비). 탱크 맨 위에 붙여요.' },
+    legs:    { name: '착륙 다리', short: '착륙 다리', mass: 150, h: 2.6, kind: 'fin', radial: true, look: 'legs', desc: '접혀 있다가 착륙 직전에 펴져요. 다시 쓰는 로켓의 발이에요.' },
+    boosterCone: { name: '원뿔 액체 부스터', short: '원뿔 부스터', mass: 300, fuel: 1500, thrust: 120000, ispSL: 255, ispV: 300, h: 5.2, kind: 'srb', radial: true, look: 'cone', r: 0.5, desc: '소유즈의 원뿔형 부스터. 다 쓰고 떨어질 때 십자가처럼 퍼져요(코롤료프 십자가).' },
+    boosterCore: { name: '측면 코어', short: '측면 코어', mass: 1300, fuel: 11000, thrust: 560000, ispSL: 270, ispV: 305, h: 12.5, kind: 'srb', radial: true, look: 'core', r: 0.625, desc: '몸통과 같은 굵기의 액체 로켓(엔진 9개). 팰컨 헤비처럼 양옆에 붙여요.' },
+    decTruss:{ name: '격자 연결부', short: '격자 연결부', mass: 70, h: 0.8, kind: 'dec', look: 'truss', desc: '뼈대만 있는 단 분리기. N1·소유즈처럼 윗단 엔진 불꽃이 빠져나갈 수 있어요.' },
   };
   // 엔진 클러스터(여러 개를 한 단에 묶기): 'engLx9'처럼 개수를 붙인 숨은 부품을 자동으로 만듦
   // 실제 예: 팰컨 9 1단 9개, 새턴 5 1단 5개, 소유즈 4개, N1 1단 30개, 슈퍼 헤비 33개
@@ -43,6 +52,21 @@
       PARTS[id + 'x' + n] = Object.assign({}, p, {
         name: p.name + ' ×' + n, short: p.short + ' ×' + n, mass: p.mass * n, thrust: p.thrust * n, base: id, cluster: n, hidden: true,
         desc: p.short + ' ' + n + '개를 한 단에 묶었어요(클러스터). 힘도 무게도 ' + n + '배예요. 엔진 하나가 고장 나도 나머지로 버틸 수 있어요.',
+      });
+    }
+  }
+  // 탱크 굵기: 'tankL@16'(굵기 1.6배), 'tankL@16-13'(아래 1.6배 → 위 1.3배 원뿔). 연료는 부피만큼 늘어요.
+  const WIDTH_OPTS = ['08', '10', '13', '16', '20', '13-10', '16-13', '20-16', '10-08'];
+  for (const id of Object.keys(PARTS)) {
+    const p = PARTS[id];
+    if (p.kind !== 'tank') continue;
+    for (const code of WIDTH_OPTS) {
+      if (code === '10') continue;
+      const [b, t] = code.split('-').map(v => +v / 10), wt = t || b, vol = (b * b + b * wt + wt * wt) / 3;
+      PARTS[id + '@' + code] = Object.assign({}, p, {
+        name: p.name + (t ? ' (원뿔 ' + b + '→' + wt + ')' : ' (굵기 ×' + b + ')'), short: p.short + (t ? ' 원뿔' : ' ×' + b),
+        mass: Math.round(p.mass * vol), fuel: Math.round(p.fuel * vol), w: b, wt, base: id, widthCode: code, hidden: true,
+        desc: (t ? '아래가 넓고 위가 좁은 원뿔 탱크' : '굵기 ' + b + '배 탱크') + '. 연료가 ' + vol.toFixed(1) + '배 들어가지만 그만큼 무거워요.',
       });
     }
   }
@@ -227,5 +251,5 @@
     return ranges;
   }
 
-  global.Parts = { PARTS, CLUSTER_N, PALETTE_ORDER, EXAMPLES, WIDTH, splitStages, segInfo, analyze, totalHeight, drawPart, drawStack };
+  global.Parts = { PARTS, CLUSTER_N, WIDTH_OPTS, PALETTE_ORDER, EXAMPLES, WIDTH, splitStages, segInfo, analyze, totalHeight, drawPart, drawStack };
 })(window);

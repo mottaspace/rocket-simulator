@@ -65,10 +65,11 @@ function mat(key) {
 // 도색: 몸통색·포인트색 (색 조합마다 재질을 한 번만 만듦)
 const paintCache = {};
 function paint(livery) {
-  const key = (livery.body || '#f1f2f4') + (livery.accent || '#141518');
+  const steel = livery.finish === 'steel';   // 스테인리스 맨 금속 (스타십)
+  const key = (livery.body || '#f1f2f4') + (livery.accent || '#141518') + (steel ? 's' : '');
   if (paintCache[key]) return paintCache[key];
-  const body = S({ map: panelTex(), color: new THREE.Color(livery.body || '#f1f2f4'), roughness: 0.38, metalness: 0.05 });
-  const plain = S({ color: new THREE.Color(livery.body || '#f1f2f4'), roughness: 0.35, metalness: 0.05 });
+  const body = S({ map: panelTex(), color: new THREE.Color(livery.body || '#f1f2f4'), roughness: steel ? 0.3 : 0.38, metalness: steel ? 0.85 : 0.05 });
+  const plain = S({ color: new THREE.Color(livery.body || '#f1f2f4'), roughness: steel ? 0.28 : 0.35, metalness: steel ? 0.85 : 0.05 });
   const accent = S({ color: new THREE.Color(livery.accent || '#141518'), roughness: 0.5, metalness: 0.2 });
   return (paintCache[key] = { body, plain, accent });
 }
@@ -138,21 +139,53 @@ const LAYOUTS = {
   30: [...ring(6, 0.3), ...ring(24, 0.8)], 33: [...ring(3, 0.13), ...ring(10, 0.47), ...ring(20, 0.83)],
 };
 const layoutCache = {};
-export function clusterLayout(id) {
+export function clusterLayout(id, w = 1) {
   const p = PARTS[id], n = p.cluster || 1, base = p.base || id;
-  const key = base + n; if (layoutCache[key]) return layoutCache[key];
+  const key = base + n + '|' + w; if (layoutCache[key]) return layoutCache[key];
   const pos = LAYOUTS[n] || [[0, 0]];
   let room = 1.05;
   for (let i = 0; i < pos.length; i++) {
     room = Math.min(room, 1.08 - Math.hypot(...pos[i]));
     for (let j = i + 1; j < pos.length; j++) room = Math.min(room, Math.hypot(pos[i][0] - pos[j][0], pos[i][1] - pos[j][1]) / 2);
   }
-  const s = Math.min(1, room * RAD / BELL_R(base));
-  return (layoutCache[key] = { pos, s, base });
+  const s = Math.min(1, room * RAD * w / BELL_R(base));
+  return (layoutCache[key] = { pos, s, base, w });
 }
 
-function partMesh(id, seg, P, opt) {
+// 부품마다 아래·위 굵기(몸통 반지름의 배수). 탱크는 스스로 정하고, 엔진은 바로 위 부품을, 분리기는 위아래를 이어 줌
+export function stackWidths(stack) {
+  const n = stack.length, out = new Array(n);
+  const own = id => { const p = PARTS[id]; return p.kind === 'tank' ? { b: p.w || 1, t: p.wt || p.w || 1 } : (p.kind === 'engine' || p.kind === 'dec') ? null : { b: 1, t: 1 }; };
+  for (let i = 0; i < n; i++) {
+    const p = PARTS[stack[i]], up = i > 0 ? out[i - 1].b : 1;
+    let w = own(stack[i]);
+    if (!w && p.kind === 'engine') w = { b: up, t: up };
+    if (!w) { const nx = i + 1 < n ? own(stack[i + 1]) : null; w = { t: up, b: nx ? nx.t : up }; }
+    out[i] = w;
+  }
+  // 노즈콘은 바로 아래 부품의 굵기에 맞춤 (탈출 타워는 그대로)
+  for (let i = n - 2; i >= 0; i--) { const p = PARTS[stack[i]]; if (p.kind === 'nose' && p.look !== 'les') out[i] = { b: out[i + 1].t, t: out[i + 1].t }; }
+  return out;
+}
+const gridTex = () => canvasTex(64, 64, (c, w, h) => {
+  c.clearRect(0, 0, w, h); c.strokeStyle = '#d8dbe0'; c.lineWidth = 5; c.strokeRect(3, 3, w - 6, h - 6);
+  c.lineWidth = 3;
+  for (let k = 1; k < 6; k++) {
+    c.beginPath(); c.moveTo(0, k * h / 6); c.lineTo(w, k * h / 6); c.stroke();
+    c.beginPath(); c.moveTo(k * w / 6, 0); c.lineTo(k * w / 6, h); c.stroke();
+  }
+});
+let _grid = null;
+const gridMat = () => _grid || (_grid = new THREE.MeshStandardMaterial({ map: gridTex(), transparent: true, alphaTest: 0.3, side: THREE.DoubleSide, metalness: 0.8, roughness: 0.4, color: 0x9aa0aa }));
+function strut(m, A, B, r) {
+  const st = new THREE.Mesh(new THREE.CylinderGeometry(r, r, A.distanceTo(B), 5), mat(m));
+  st.position.copy(A).add(B).multiplyScalar(0.5); st.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), B.clone().sub(A).normalize());
+  return st;
+}
+
+function partMesh(id, seg, P, opt, wd) {
   const p = PARTS[id], h = p.h, g = new THREE.Group();
+  const W = wd || { b: 1, t: 1 };
   switch (p.kind) {
     case 'chute':
       g.add(cyl(RAD * 0.42, RAD * 0.6, h * 0.75, seg, P.plain, 0));
@@ -171,22 +204,43 @@ function partMesh(id, seg, P, opt) {
       }
       break;
     }
-    case 'nose': g.add(ogive(RAD, h, seg, P.plain, 0)); break;
+    case 'nose': {
+      if (p.look === 'les') {
+        // 비상 탈출 타워: 뼈대 + 고체 모터 + 뾰족한 끝
+        g.add(cyl(RAD * 0.98, RAD, 0.05, seg, 'steel', 0));
+        for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + Math.PI / 4; g.add(strut('darkMetal', new THREE.Vector3(Math.cos(a) * 0.42, 0.05, Math.sin(a) * 0.42), new THREE.Vector3(Math.cos(a) * 0.12, 1.0, Math.sin(a) * 0.12), 0.025)); }
+        g.add(cyl(0.18, 0.18, 1.3, seg, 'white', 1.0));
+        g.add(cyl(0.2, 0.2, 0.12, seg, 'black', 1.0));
+        for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2, nz = cyl(0.03, 0.06, 0.16, 8, 'darkMetal', 1.02); nz.position.x = Math.cos(a) * 0.17; nz.position.z = Math.sin(a) * 0.17; g.add(nz); }
+        g.add(ogive(0.18, 0.5, seg, 'white', 2.3));
+        break;
+      }
+      const RN = RAD * W.b;
+      g.add(ogive(RN, h, seg, P.plain, 0));
+      if (p.look === 'starship') {
+        // 한쪽 면은 검은 내열 타일, 앞날개 2개
+        const pts = []; for (let i = 0; i <= 14; i++) { const t = i / 14; pts.push(new THREE.Vector2(RN * Math.sqrt(1 - t * t) * (1 - t * 0.15) * 1.012 + 0.0001, h * t)); }
+        g.add(new THREE.Mesh(new THREE.LatheGeometry(pts, seg, Math.PI / 2, Math.PI), mat('black')));
+        for (const sx of [-1, 1]) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.1, 0.05), mat('black')); f.position.set(sx * (RN * 0.62 + 0.28), h * 0.3, -0.05); f.rotation.z = -sx * 0.32; g.add(f); }
+      }
+      break;
+    }
     case 'tank': {
-      g.add(cyl(RAD, RAD, h, seg, P.body, 0));
-      g.add(cyl(RAD + 0.008, RAD + 0.008, 0.16, seg, P.accent, 0));
-      g.add(cyl(RAD + 0.008, RAD + 0.008, 0.16, seg, P.accent, h - 0.16));
-      if (h > 4) g.add(cyl(RAD + 0.008, RAD + 0.008, 0.1, seg, P.accent, h * 0.5));
+      const rb = RAD * W.b, rt = RAD * W.t, rAt = f => rb + (rt - rb) * f;
+      g.add(cyl(rt, rb, h, seg, P.body, 0));
+      g.add(cyl(rAt(0.02) + 0.008, rb + 0.008, 0.16, seg, P.accent, 0));
+      g.add(cyl(rt + 0.008, rAt(0.98) + 0.008, 0.16, seg, P.accent, h - 0.16));
+      if (h > 4) g.add(cyl(rAt(0.51) + 0.008, rAt(0.49) + 0.008, 0.1, seg, P.accent, h * 0.5));
       break;
     }
     case 'engine': {
       if (p.cluster > 1) {
         // 같은 엔진 여러 개를 줄여서 원형으로 배치 + 위쪽 추력 구조(엔진 받침판)
-        const L = clusterLayout(id), one = partMesh(L.base, p.cluster >= 9 ? Math.max(10, seg >> 1) : seg, P, opt);
+        const L = clusterLayout(id, W.b), R = RAD * W.b, one = partMesh(L.base, p.cluster >= 9 ? Math.max(10, seg >> 1) : seg, P, opt);
         const top = h * L.s * 0.55;   // 엔진 윗부분을 덮는 추력 구조(엔진 받침 치마)
-        g.add(cyl(RAD * 0.97, RAD, h - top, seg, 'darkMetal', top));
-        g.add(cyl(RAD * 0.99, RAD * 0.99, 0.08, seg, P.accent, top));
-        for (const [x, z] of L.pos) { const e = one.clone(); e.scale.setScalar(L.s); e.position.set(x * RAD, 0, z * RAD); g.add(e); }
+        g.add(cyl(R * 0.97, R, h - top, seg, 'darkMetal', top));
+        g.add(cyl(R * 0.99, R * 0.99, 0.08, seg, P.accent, top));
+        for (const [x, z] of L.pos) { const e = one.clone(); e.scale.setScalar(L.s); e.position.set(x * R, 0, z * R); g.add(e); }
         break;
       }
       if (p.ion) {
@@ -196,6 +250,7 @@ function partMesh(id, seg, P, opt) {
         break;
       }
       const big = id === 'engL' || id === 'engH', vac = id === 'engV', huge = id === 'engH';
+      if (W.b > 1.05) g.add(cyl(RAD * W.b, RAD * 0.9, h * 0.32, seg, 'darkMetal', h * 0.68)); // 굵은 탱크 아래: 원뿔 치마
       g.add(cyl(RAD * 0.86, RAD * 0.7, h * 0.32, seg, 'darkMetal', h * 0.68));
       g.add(cyl(0.12, 0.12, h * 0.25, 8, 'steel', h * 0.45));
       const pipes = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.04, 6, 16), mat('steel')); pipes.rotation.x = Math.PI / 2; pipes.position.y = h * 0.55; g.add(pipes);
@@ -203,7 +258,33 @@ function partMesh(id, seg, P, opt) {
       break;
     }
     case 'srb': {
-      const r = p.radial ? BR : RAD;
+      if (p.look === 'cone') {
+        // 소유즈형 원뿔 부스터: 위가 뾰족, 아래에 작은 엔진 4개
+        const r = p.r || BR, pts = [];
+        for (let i = 0; i <= 16; i++) { const t = i / 16; pts.push(new THREE.Vector2(Math.max(0.02, r * (1 - Math.pow(t, 1.25) * 0.86)), 0.5 + (h - 0.5) * t)); }
+        g.add(new THREE.Mesh(new THREE.LatheGeometry(pts, seg), P.plain));
+        g.add(cyl(r * 0.95, r * 0.95, 0.5, seg, 'darkMetal', 0));
+        g.add(cyl(r + 0.01, r * 0.99, 0.14, seg, P.accent, 0.55));
+        for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2 + Math.PI / 4, b = bell(0.05, r * 0.33, 0.42, Math.max(10, seg >> 1), -0.3); b.position.x = Math.cos(a) * r * 0.48; b.position.z = Math.sin(a) * r * 0.48; g.add(b); }
+        break;
+      }
+      if (p.look === 'core') {
+        // 팰컨 헤비형 측면 코어: 몸통과 같은 굵기, 노즈콘, 검은 연결부, 엔진 9개, 격자 날개·착륙 다리
+        const r = p.r || RAD;
+        g.add(cyl(r, r, h - 1.6, seg, P.body, 0.6));
+        g.add(cyl(r + 0.01, r + 0.01, 0.7, seg, 'black', h - 1.7));
+        g.add(ogive(r, 1.0, seg, P.plain, h - 1.0));
+        g.add(cyl(r * 0.97, r, 0.6, seg, 'darkMetal', 0));
+        const one = partMesh('engL', Math.max(10, seg >> 1), P, opt);
+        for (const [x, z] of LAYOUTS[9]) { const e = one.clone(); e.scale.setScalar(0.3); e.position.set(x * r * 0.95, -0.35, z * r * 0.95); g.add(e); }
+        for (let k = 0; k < 4; k++) {
+          const a = k * Math.PI / 2 + Math.PI / 4;
+          const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.42), gridMat()); gf.position.set(Math.cos(a) * (r + 0.03), h - 2.0, Math.sin(a) * (r + 0.03)); gf.rotation.y = -a + Math.PI / 2; g.add(gf);
+          const lg = new THREE.Mesh(new THREE.BoxGeometry(0.12, 2.0, 0.1), mat('black')); lg.position.set(Math.cos(a) * (r + 0.05), 1.6, Math.sin(a) * (r + 0.05)); lg.rotation.y = -a; g.add(lg);
+        }
+        break;
+      }
+      const r = p.radial ? (p.r || BR) : RAD * W.b;
       g.add(cyl(r, r, h - 0.6, seg, P.plain, 0.6));
       for (let i = 0; i < 3; i++) g.add(cyl(r + 0.008, r + 0.008, 0.12, seg, P.accent, 0.9 + i * (h - 1.4) / 3));
       if (p.radial) g.add(ogive(r, 0.9, seg, P.plain, h - 0.02));
@@ -211,10 +292,20 @@ function partMesh(id, seg, P, opt) {
       g.add(bell(r * 0.35, r * 0.72, 0.45, seg, 0));
       break;
     }
-    case 'dec':
-      g.add(cyl(RAD + 0.03, RAD + 0.03, h, seg, 'darkMetal', 0));
-      g.add(cyl(RAD + 0.035, RAD + 0.035, h * 0.25, seg, 'steel', h * 0.38));
+    case 'dec': {
+      const rb = RAD * W.b + 0.03, rt = RAD * W.t + 0.03;
+      if (p.look === 'truss') {
+        g.add(cyl(rb, rb, 0.1, seg, 'darkMetal', 0)); g.add(cyl(rt, rt, 0.1, seg, 'darkMetal', h - 0.1));
+        for (let k = 0; k < 12; k++) {
+          const a0 = k / 12 * Math.PI * 2, a1 = a0 + Math.PI / 6 * (k % 2 ? 1 : -1);
+          g.add(strut('darkMetal', new THREE.Vector3(Math.cos(a0) * rb * 0.97, 0.1, Math.sin(a0) * rb * 0.97), new THREE.Vector3(Math.cos(a1) * rt * 0.97, h - 0.1, Math.sin(a1) * rt * 0.97), 0.035));
+        }
+        break;
+      }
+      g.add(cyl(rt, rb, h, seg, 'darkMetal', 0));
+      g.add(cyl((rt + rb) / 2 + 0.005, (rt + rb) / 2 + 0.005, h * 0.25, seg, 'steel', h * 0.38));
       break;
+    }
     case 'sat': { const sat = buildSatellite(p.sat, seg, false); sat.scale.setScalar(Math.min(1, h / (p.sat === 'obs' ? 2.4 : 2.1))); g.add(sat); break; }
     case 'shield': g.add(cyl(RAD + 0.05, RAD + 0.08, h, seg, 'heat', 0)); break;
     case 'lab': {
@@ -246,15 +337,16 @@ export function buildRocket(design, quality, opt = {}) {
   const seg = quality === 'low' ? 12 : quality === 'medium' ? 20 : 32;
   const P = paint(d.livery || {});
   const group = new THREE.Group(), parts = [], nozzles = [], ys = [];
+  const WS = stackWidths(d.stack);
   let y = 0;
   for (let i = d.stack.length - 1; i >= 0; i--) {
-    const id = d.stack[i], m = partMesh(id, seg, P, opt);
+    const id = d.stack[i], m = partMesh(id, seg, P, opt, WS[i]);
     m.position.y = y; m.userData = { stack: i };
     group.add(m); parts.push({ mesh: m, stack: i });
     ys[i] = y;
     if (i === d.stack.length - 1 && PARTS[id].cluster > 1) {
-      const L = clusterLayout(id), sz = NOZZLE_SIZE(L.base) * Math.max(0.3, L.s * 1.1);
-      for (const [x, z] of L.pos) nozzles.push([x * RAD, y, z * RAD, sz, 'core']);
+      const L = clusterLayout(id, WS[i].b), sz = NOZZLE_SIZE(L.base) * Math.max(0.3, L.s * 1.1), R = RAD * WS[i].b;
+      for (const [x, z] of L.pos) nozzles.push([x * R, y, z * R, sz, 'core']);
     } else if (i === d.stack.length - 1 && (PARTS[id].kind === 'engine' || PARTS[id].kind === 'srb')) nozzles.push([0, y, 0, NOZZLE_SIZE(id), PARTS[id].ion ? 'ion' : 'core']);
     y += PARTS[id].h;
   }
@@ -274,22 +366,37 @@ export function buildRocket(design, quality, opt = {}) {
   }
   (d.radial || []).forEach((r, ri) => {
     if (ys[r.at] == null) return;
-    const p = PARTS[r.id], g = new THREE.Group();
+    const p = PARTS[r.id], g = new THREE.Group(), wAt = WS[r.at] ? Math.max(WS[r.at].b, WS[r.at].t) : 1, RA = RAD * wAt, hostH = PARTS[d.stack[r.at]].h;
     for (let k = 0; k < r.n; k++) {
-      const a = k / r.n * Math.PI * 2 + Math.PI / 4, b = new THREE.Group();
-      if (p.kind === 'fin') {
+      const a = k / r.n * Math.PI * 2 + Math.PI / 4 + (r.rot || 0), b = new THREE.Group();
+      if (p.kind === 'fin' && p.look === 'flap') {
+        const hh = Math.min(p.h, hostH * 0.9), fl = new THREE.Mesh(new THREE.BoxGeometry(0.06, hh, 0.95), mat('black'));
+        fl.position.set(0, hh / 2 + 0.2, RA + 0.45); b.add(fl); b.position.y = ys[r.at]; b.rotation.y = a;
+      } else if (p.kind === 'fin' && p.look === 'grid') {
+        const gf = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.5), gridMat()); gf.position.set(0, hostH - 0.45, RA + 0.03); b.add(gf);
+        const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.1), mat('darkMetal')); arm.position.set(0, hostH - 0.45, RA); b.add(arm);
+        b.position.y = ys[r.at]; b.rotation.y = a;
+      } else if (p.kind === 'fin' && p.look === 'legs') {
+        const lh = Math.min(p.h, hostH), lg = new THREE.Mesh(new THREE.BoxGeometry(0.16, lh, 0.1), mat('black')); lg.position.set(0, lh / 2, RA + 0.05); b.add(lg);
+        const ft = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.16), mat('darkMetal')); ft.position.set(0, 0.06, RA + 0.08); b.add(ft);
+        b.position.y = ys[r.at]; b.rotation.y = a;
+      } else if (p.kind === 'fin') {
         const hh = Math.min(p.h, PARTS[d.stack[r.at]].h * 1.1);
         const shape = new THREE.Shape(); shape.moveTo(0, 0); shape.lineTo(0.95, -0.25); shape.lineTo(0.95, hh * 0.35); shape.lineTo(0, hh); shape.closePath();
         const fin = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.06, bevelEnabled: false }), P.accent);
-        fin.position.set(-0.03, 0, RAD - 0.02); fin.rotation.y = -Math.PI / 2; b.add(fin);
+        fin.position.set(-0.03, 0, RA - 0.02); fin.rotation.y = -Math.PI / 2; b.add(fin);
         b.position.y = ys[r.at]; b.rotation.y = a;
       } else {
+        const br = p.r || BR;
         b.add(partMesh(r.id, seg, P, opt));
-        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.2), mat('darkMetal')); strut.position.set(0, p.h * 0.75, -(BR + 0.05)); b.add(strut);
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.2), mat('darkMetal')); strut.position.set(0, p.h * 0.75, -(br + 0.05)); b.add(strut);
         const strut2 = strut.clone(); strut2.position.y = p.h * 0.25; b.add(strut2);
-        const off = RAD + BR + 0.06;
+        const off = RA + br + 0.06;
         b.position.set(Math.sin(a) * off, ys[r.at], Math.cos(a) * off); b.rotation.y = a;
-        nozzles.push([Math.sin(a) * off, ys[r.at], Math.cos(a) * off, 0.75, 'booster']);
+        if (p.look === 'core') {
+          // 부스터 엔진 9개 각각 불꽃 (부스터 쪽 좌표 → 로켓 좌표로 회전)
+          for (const [x, z] of LAYOUTS[9]) { const lx = x * br * 0.95, lz = z * br * 0.95; nozzles.push([Math.sin(a) * off + lx * Math.cos(a) + lz * Math.sin(a), ys[r.at] - 0.35, Math.cos(a) * off - lx * Math.sin(a) + lz * Math.cos(a), 0.45, 'booster']); }
+        } else nozzles.push([Math.sin(a) * off, ys[r.at], Math.cos(a) * off, p.look === 'cone' ? 0.9 : 0.75, 'booster']);
       }
       g.add(b);
     }
@@ -303,15 +410,15 @@ export function buildRocket(design, quality, opt = {}) {
     d.stack.forEach((id, i) => { if (['tank', 'lab'].includes(PARTS[id].kind) && PARTS[id].h > bh) { bh = PARTS[id].h; best = i; } });
     if (best >= 0) {
       const tex = new THREE.CanvasTexture(decalCanvas(lv.flag, opt.name, lv.mark, lv.accent)); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-      const hh = Math.min(bh * 0.86, 4.2), wAng = (hh / 4) / RAD;
-      const decal = new THREE.Mesh(new THREE.CylinderGeometry(RAD + 0.012, RAD + 0.012, hh, 24, 1, true, -wAng / 2, wAng),
+      const rr = RAD * (WS[best].b + WS[best].t) / 2, hh = Math.min(bh * 0.86, 4.2), wAng = (hh / 4) / rr;
+      const decal = new THREE.Mesh(new THREE.CylinderGeometry(RAD * WS[best].t + 0.012, RAD * WS[best].b + 0.012, hh, 24, 1, true, -wAng / 2, wAng),
         new THREE.MeshStandardMaterial({ map: tex, transparent: true, roughness: 0.45, polygonOffset: true, polygonOffsetFactor: -1 }));
       decal.position.y = ys[best] + bh / 2;
       group.add(decal);
     }
   }
   group.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { group, height: y, nozzles, parts };
+  return { group, height: y, nozzles, parts, coreR: RAD * (WS.length ? WS[WS.length - 1].b : 1) };
 }
 
 export function buildCanopy() {

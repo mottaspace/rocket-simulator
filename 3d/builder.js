@@ -1,10 +1,10 @@
 // 3D 조립 화면(격납고): 끌어다 붙이기·탭해서 쌓기, 측면 부스터·날개 대칭, 도색·국기·이름·불꽃, 성능 표
 import * as THREE from './vendor/three.module.min.js';
-import { analyze3d, normalizeDesign, EXAMPLES3D, FLAMES } from './physics3d.js';
+import { analyze3d, normalizeDesign, EXAMPLES3D, REAL_ROCKETS, FLAMES } from './physics3d.js';
 import { buildRocket, setFlameType } from './rocketModel.js';
 import { FLAGS, flagThumb } from './flags.js';
 
-const { PARTS, CLUSTER_N } = window.Parts;
+const { PARTS, CLUSTER_N, WIDTH_OPTS } = window.Parts;
 const $ = id => document.getElementById(id);
 const fmtN = (n, d = 0) => Number(n).toLocaleString('ko-KR', { maximumFractionDigits: d, minimumFractionDigits: d });
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -19,6 +19,7 @@ const CATS = [
   { name: '엔진', ids: ['engS', 'engL', 'engH', 'engV', 'srb'] },
   { name: '부스터·날개', ids: ['srbS', 'fin', 'dec'] },
   { name: '기발한 부품', ids: ['catPod', 'balloon', 'lab', 'sail', 'ion'] },
+  { name: '실제 로켓 부품', ids: ['ssNose', 'les', 'flap', 'gridFin', 'legs', 'boosterCone', 'boosterCore', 'decTruss'] },
 ];
 const TOP_KINDS = ['pod', 'chute', 'nose', 'sat', 'fairing', 'balloon', 'lab', 'sail'];
 const COLORS = ['#f1f2f4', '#141518', '#ff7a2e', '#d23b2e', '#1f4fa8', '#2a7fd6', '#36c27a', '#d4a645', '#ffb7c5', '#7a3e9d', '#9aa0aa', '#1c2333'];
@@ -90,14 +91,21 @@ export class Builder {
     tabs.onclick = e => { const b = e.target.closest('button'); if (!b) return; this.cat = +b.dataset.c; tabs.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); this.renderPalette(); };
     this.renderPalette();
     const ex = $('bExample');
-    ex.innerHTML = '<option value="">예제 불러오기</option>' + EXAMPLES3D.map((e, i) => `<option value="${i}">${esc(e.name)}</option>`).join('');
-    ex.onchange = () => { if (ex.value === '') return; const e = EXAMPLES3D[+ex.value]; this.set(JSON.parse(JSON.stringify(e.design)), e.name); ex.value = ''; };
+    ex.innerHTML = '<option value="">예제 불러오기</option><optgroup label="🚀 실제 로켓">' + REAL_ROCKETS.map((e, i) => `<option value="r${i}">${esc(e.name)}</option>`).join('') + '</optgroup><optgroup label="연습용 예제">' +
+      EXAMPLES3D.map((e, i) => `<option value="${i}">${esc(e.name)}</option>`).join('') + '</optgroup>';
+    ex.onchange = () => {
+      if (ex.value === '') return;
+      if (ex.value[0] === 'r') { const e = REAL_ROCKETS[+ex.value.slice(1)]; this.set(JSON.parse(JSON.stringify(e.design)), e.name); this.showReal(e); }
+      else { const e = EXAMPLES3D[+ex.value]; this.set(JSON.parse(JSON.stringify(e.design)), e.name); }
+      ex.value = '';
+    };
     $('bName').value = this.name;
     $('bName').oninput = () => { this.name = $('bName').value.slice(0, 30); store.set('rocket3d.buildName', this.name); clearTimeout(this._nt); this._nt = setTimeout(() => this.rebuild(), 400); };
     $('bUp').onclick = () => this.move(-1);
     $('bDown').onclick = () => this.move(1);
     $('bDel').onclick = () => this.remove();
     $('bCluster').onclick = () => this.openCluster();
+    $('bWidth').onclick = () => this.openWidth();
     $('bSym').onclick = e => { const b = e.target.closest('button'); if (!b) return; this.setSym(+b.dataset.n); };
     $('bClear').onclick = () => this.set({ stack: [], radial: [], livery: this.design.livery, flame: this.design.flame }, '나만의 로켓');
     $('bLaunch').onclick = () => { const a = analyze3d(this.design); if (a.ok) this.onLaunch(JSON.parse(JSON.stringify(this.design)), this.name || '나만의 로켓'); };
@@ -281,6 +289,15 @@ export class Builder {
     else { const i = this.sel.stack; d.stack.splice(i, 1); d.radial = d.radial.filter(r => r.at !== i).map(r => ({ ...r, at: r.at > i ? r.at - 1 : r.at })); }
     this.sel = null; this.save(); this.rebuild();
   }
+  // 실제 로켓 소개 카드
+  showReal(e) {
+    const f = e.facts, row = (k, v) => `<div><span>${k}</span><b>${esc(v)}</b></div>`;
+    this.sheet('<h2>🚀 ' + esc(e.name) + '</h2><div class="bench-grid">' + row('나라', f.country) + row('첫 발사', f.first) + row('높이', f.height) + row('구성', f.stages) + '</div>' +
+      '<p><b>엔진</b> ' + esc(f.engines) + '</p><p class="fact">💡 ' + esc(e.story) + '</p>' +
+      '<p class="muted">게임의 지구는 실제의 1/16 크기라서 로켓의 크기와 힘도 줄였어요. 단 구성·엔진 수·모양은 실제를 닮게 만들었어요. 부품을 바꿔 나만의 로켓으로 고쳐 볼 수도 있어요.</p>',
+      [{ label: '조립 화면에서 보기' }, { label: '발사대로 ▶', primary: true, fn: () => { const a = analyze3d(this.design); if (a.ok) this.onLaunch(JSON.parse(JSON.stringify(this.design)), this.name); } }]);
+  }
+
   // 선택한 엔진을 여러 개 묶기 (클러스터)
   selEngine() {
     const i = this.sel && this.sel.stack; if (i == null) return null;
@@ -297,6 +314,28 @@ export class Builder {
     $('sheetBody').querySelectorAll('.cluster-grid button').forEach(b => b.onclick = () => {
       const n = +b.dataset.n, cur = this.selEngine(); if (!cur) return;
       this.design.stack[cur.i] = n === 1 ? cur.base : cur.base + 'x' + n;
+      $('sheetBody').querySelectorAll('.cluster-grid button').forEach(x => x.classList.toggle('on', x === b));
+      this.save(); this.rebuild();
+    });
+  }
+
+  // 선택한 탱크의 굵기 바꾸기 (원뿔 포함)
+  selTank() {
+    const i = this.sel && this.sel.stack; if (i == null) return null;
+    const id = this.design.stack[i], p = PARTS[id]; if (!p || p.kind !== 'tank') return null;
+    return { i, id, base: p.base || id, code: p.widthCode || '10' };
+  }
+  openWidth() {
+    const t = this.selTank(); if (!t) return;
+    const label = c => { const [b, w] = c.split('-').map(v => +v / 10); return w ? b + '→' + w : '×' + b; };
+    const note = { '08': '가늘게', '10': '기본', '13': '조금 굵게', '16': '굵게 · 새턴 5', '20': '아주 굵게', '13-10': '원뿔', '16-13': '원뿔 · N1', '20-16': '원뿔 · N1 1단', '10-08': '원뿔(가늘게)' };
+    const html = '<h2>📏 탱크 굵기</h2><p class="muted">굵게 하면 연료가 부피만큼 더 들어가요. 대신 무겁고 공기저항도 커져요. 엔진·분리기는 굵기에 맞춰 저절로 바뀌어요.</p><div class="cluster-grid">' +
+      WIDTH_OPTS.map(c => `<button data-c="${c}" class="${c === t.code ? 'on' : ''}"><b>${label(c)}</b><small>${note[c] || ''}</small></button>`).join('') + '</div>' +
+      '<p class="fact">💡 새턴 5 1단은 지름 10 m, 소유즈는 3 m예요. N1은 아래가 넓은 원뿔 모양이라 30개의 엔진을 바닥에 늘어놓을 수 있었어요.</p>';
+    this.sheet(html, [{ label: '닫기' }]);
+    $('sheetBody').querySelectorAll('.cluster-grid button').forEach(b => b.onclick = () => {
+      const cur = this.selTank(); if (!cur) return;
+      this.design.stack[cur.i] = b.dataset.c === '10' ? cur.base : cur.base + '@' + b.dataset.c;
       $('sheetBody').querySelectorAll('.cluster-grid button').forEach(x => x.classList.toggle('on', x === b));
       this.save(); this.rebuild();
     });
@@ -368,6 +407,7 @@ export class Builder {
     const isStack = this.sel && this.sel.stack != null;
     $('bUp').disabled = $('bDown').disabled = !isStack;
     $('bDel').disabled = !this.sel;
+    const tk = this.selTank(); $('bWidth').hidden = !tk; if (tk) $('bWidth').querySelector('b').textContent = tk.code === '10' ? '×1' : tk.code.includes('-') ? '원뿔' : '×' + (+tk.code / 10);
     const eng = this.selEngine(); $('bCluster').hidden = !eng; if (eng) $('bCluster').querySelector('b').textContent = '×' + eng.n;
     const n = this.sel && this.sel.radial != null ? this.design.radial[this.sel.radial].n : this.sym;
     $('bSym').querySelectorAll('button').forEach(b => b.classList.toggle('on', +b.dataset.n === n));

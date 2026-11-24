@@ -212,7 +212,7 @@ export function analyze3d(design) {
   const w = [], st = d.stack, kinds = st.map(id => PARTS[id].kind), hasK = k => kinds.includes(k);
   if (!st.length) w.push({ t: '부품이 없어요.', fatal: true });
   else {
-    if (!hasK('pod') && !hasK('sat') && !hasK('lab')) w.push({ t: '조종할 부품(캡슐·위성·실험실)이 필요해요.', fatal: true });
+    if (!hasK('pod') && !hasK('sat') && !hasK('lab') && !d.stack.some(id => PARTS[id].control)) w.push({ t: '조종할 부품(캡슐·위성·실험실)이 필요해요.', fatal: true });
     if (!stages[0] || !stages[0].thrust) w.push({ t: '맨 아래 단에 엔진이나 부스터가 없어요.', fatal: true });
     else if (stages[0].twr < 1 && !hasK('balloon')) w.push({ t: '추력이 무게보다 약해서 이륙할 수 없어요 (추력/무게 < 1).', fatal: true });
     else if (stages[0].twr < 1.25) w.push({ t: '추력/무게가 1.25보다 작아요. 중력에 연료를 많이 빼앗겨 궤도에 못 갈 수 있어요.', fatal: false });
@@ -303,6 +303,11 @@ export class Rocket3D {
     return 'none';
   }
   orbit() { return orbit(this.pos, this.vel); }
+  // 가장 굵은 부품 기준 정면 면적 배수 (굵은 로켓은 공기저항도 큼)
+  get areaK() {
+    if (this._akV !== this.version) { this._akV = this.version; let w = 1; for (const s of this.segs) for (const id of s.ids) w = Math.max(w, PARTS[id].w || 1); this._ak = w * w; }
+    return this._ak;
+  }
   addImpact(d, name) {
     const pr = predictImpact(d.pos, d.vel, d.kind);
     this.impacts.push({ name, ...pr, at: this.t, alt: this.alt, speed: this.speed });
@@ -494,7 +499,7 @@ export class Rocket3D {
       const top = this.segs.length ? PARTS[this.segs[this.segs.length - 1].ids[0]] : null;
       const pointy = top && (top.kind === 'nose' || top.kind === 'fairing');
       const backward = this.aoa > Math.PI / 2; // 열 방패가 앞: 뭉툭한 면이 공기를 받아 저항이 큼
-      let cdA = (backward ? 1.25 : pointy ? 0.32 : 0.45) * machFactor(va / soundSpeed(alt)) * AREA;
+      let cdA = (backward ? 1.25 : pointy ? 0.32 : 0.45) * machFactor(va / soundSpeed(alt)) * AREA * this.areaK;
       if (this.active && this.active.boosters.some(b => b.attached)) cdA *= 1.6;
       // 낙하산: 모든 방향의 상대 바람에 저항
       if (this.chute === 'open') F = V.sub(F, V.mul(rel, 0.5 * rho * va * CHUTE_CD * CHUTE_AREA));
@@ -646,6 +651,16 @@ export class Autopilot {
 }
 
 // 예제 설계 (3D)
+// 실제 로켓을 닮은 예제 (1/16 크기 지구에 맞춰 크기·힘은 줄이고, 단 구성·엔진 수·모양은 실제처럼)
+export const REAL_ROCKETS = [
+  { key: "nuri", name: "누리호", design: {"stack": ["fairing", "satObs", "dec", "tankM", "engV", "dec", "tankL@13", "engL", "dec", "tankXL@13", "tankL@13", "engLx4"], "radial": [{"at": 11, "id": "fin", "n": 4}], "livery": {"body": "#f3f4f6", "accent": "#1b1d22", "flag": "KR"}, "flame": "kerosene"}, facts: {"country": "대한민국", "first": "2021년 (2022년 첫 성공)", "height": "47.2 m", "stages": "3단", "engines": "1단 75톤 엔진 4개 묶음 · 2단 1개 · 3단 7톤 1개"}, story: "우리 기술로 만든 첫 우주발사체예요. 1단은 75톤급 엔진 4개를 한 몸처럼 움직이게 묶었어요(클러스터링). 나로우주센터 제2발사대에서 발사해요." },
+  { key: "soyuz", name: "소유즈", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "decTruss", "tankM", "engL", "decTruss", "tankXL", "tankL", "engSx4"], "radial": [{"at": 10, "id": "boosterCone", "n": 4}, {"at": 12, "id": "fin", "n": 4}], "livery": {"body": "#c3c8bb", "accent": "#e06a2c", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련·러시아", "first": "1966년", "height": "약 46 m", "stages": "부스터 4개 + 2단 + 3단", "engines": "부스터·중심 단 모두 4개 노즐"}, story: "역사상 가장 많이 발사된 로켓 계열(R-7)이에요. 지금도 우주비행사를 실어 날라요. 부스터 4개가 떨어지며 십자가처럼 퍼지는 모습을 '코롤료프 십자가'라고 불러요." },
+  { key: "saturn", name: "새턴 5", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "dec", "tankL@13", "engV", "dec", "tankL@20", "engLx5", "dec", "tankXL@20", "engLx5"], "radial": [{"at": 14, "id": "fin", "n": 4}], "livery": {"body": "#f4f4f2", "accent": "#151515", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (NASA)", "first": "1967년", "height": "110.6 m", "stages": "3단", "engines": "1단 F-1 엔진 5개 · 2단 J-2 5개 · 3단 J-2 1개"}, story: "아폴로 11호(1969)를 달로 보낸 로켓이에요. 13번 발사되는 동안 우주비행사를 한 번도 잃지 않았어요. 맨 위의 뾰족한 탑은 비상 탈출 타워예요." },
+  { key: "n1", name: "N1", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engS", "decTruss", "tankM@13-10", "engVx4", "decTruss", "tankL@16-13", "engVx7", "decTruss", "tankXL@20-16", "engSx30"], "radial": [{"at": 14, "id": "gridFin", "n": 4}], "livery": {"body": "#e6e3da", "accent": "#2b2b2b", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련", "first": "1969년 (시험 4번)", "height": "105 m", "stages": "4단 + 달 착륙선", "engines": "1단 NK-15 엔진 30개"}, story: "소련이 달에 가려고 만든 거대한 로켓이에요. 1단 엔진 30개를 함께 맞추기가 너무 어려워 4번 모두 실패했어요. 엔진을 많이 묶을수록 제어가 어렵다는 교훈을 남겼어요." },
+  { key: "f9", name: "팰컨 9", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2010년", "height": "약 70 m", "stages": "2단", "engines": "1단 멀린 엔진 9개 · 2단 1개"}, story: "1단이 다시 돌아와 착륙해서 수십 번이나 다시 써요(2015년 첫 착륙). 격자 날개로 방향을 잡고 착륙 다리를 펴고 내려와요." },
+  { key: "fh", name: "팰컨 헤비", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "boosterCore", "n": 2, "rot": 0.785}, {"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2018년", "height": "약 70 m", "stages": "1단 코어 3개 + 2단", "engines": "코어마다 멀린 9개, 모두 27개"}, story: "팰컨 9 1단 세 개를 나란히 묶은 로켓이에요. 양옆 부스터 2개가 동시에 돌아와 나란히 착륙하는 장면으로 유명해요." },
+  { key: "starship", name: "스타십", design: {"stack": ["ssNose", "tankL@16", "engVx3", "decTruss", "tankXL@16", "tankL@16", "engSx33"], "radial": [{"at": 1, "id": "flap", "n": 2}, {"at": 4, "id": "gridFin", "n": 4}], "livery": {"body": "#b8bdc4", "accent": "#18191b", "flag": "NONE", "finish": "steel"}, "flame": "methane"}, facts: {"country": "미국 (스페이스X)", "first": "2023년 (시험 비행)", "height": "약 120 m", "stages": "2단 (슈퍼 헤비 + 스타십)", "engines": "슈퍼 헤비 랩터 33개 · 스타십 6개"}, story: "지금까지 만든 로켓 중 가장 크고 힘이 세요. 스테인리스강으로 만들고 두 단 모두 다시 쓰는 것이 목표예요. 2024년에는 돌아오는 슈퍼 헤비를 발사탑의 '젓가락' 팔로 붙잡았어요." },
+];
 const L = (body, accent, flag) => ({ body, accent, flag });
 export const EXAMPLES3D = [
   { name: '통신위성 발사체', design: { stack: ['fairing', 'satCom', 'dec', 'tankM', 'engV', 'dec', 'tankL', 'tankM', 'engL'], radial: [{ at: 6, id: 'srbS', n: 2 }, { at: 8, id: 'fin', n: 4 }], livery: L('#f1f2f4', '#141518', 'KR'), flame: 'kerosene' } },

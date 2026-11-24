@@ -175,7 +175,7 @@ function fitPadToRocket() {
   const g = rocketModel.group, par = g.parent; if (par) par.remove(g);
   g.updateMatrixWorld(true); const box = new THREE.Box3().setFromObject(g); if (par) par.add(g);
   const rMax = Math.max(Math.abs(box.min.x), Math.abs(box.max.x), Math.abs(box.min.z), Math.abs(box.max.z));
-  world.fitPad(rocketModel.height, 0.625, Math.min(rMax, 3));
+  world.fitPad(rocketModel.height, rocketModel.coreR || 0.625, Math.min(rMax, 3.5));
 }
 
 let modelSail = false, modelBalloon = 'none', lastStrike = -1;
