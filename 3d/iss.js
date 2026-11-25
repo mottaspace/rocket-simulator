@@ -46,8 +46,8 @@ export function issState(tMs) {
 export const ISS_EL = { a: R, e: 0, P, Q, ap: ISS_INFO.alt, pe: ISS_INFO.alt, period: ISS_PERIOD };
 
 // 발사 창: ISS가 발사장보다 이만큼 앞서 있을 때 쏘면, 궤도에 오를 즈음 ISS 근처에 닿아요
-export const WINDOW_LEAD = 0.45;      // rad (약 26°)
-export const WINDOW_HALF = 0.22;      // 창의 너비 ±(약 13°)
+export const WINDOW_LEAD = 0.0;       // rad: 발사할 때 ISS가 거의 머리 위 (오르는 동안 ISS가 조금 앞서게 됨)
+export const WINDOW_HALF = 0.1;       // 창의 너비 ±(약 6°)
 export function launchWindow(tMs) {
   const u = issPhase(tMs);
   let d = u - WINDOW_LEAD; d = ((d + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;   // -π..π

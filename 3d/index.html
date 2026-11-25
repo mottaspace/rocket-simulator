@@ -69,6 +69,12 @@
   </div>
   <button class="perf-pill fl" id="perfPill">품질 -</button>
   <button class="mission-chip fl" id="fMission" hidden></button>
+  <button class="target-chip fl" id="fTarget" hidden></button>
+  <div class="rcs-pad fl" id="rcsPad" hidden aria-label="미세 이동(자세 제어 추진기)">
+    <button data-r="up">위</button><button data-r="fwd">앞 ▲</button><button data-r="down">아래</button>
+    <button data-r="left">◀ 왼</button><button data-r="stop">멈춤</button><button data-r="right">오른 ▶</button>
+    <span></span><button data-r="back">뒤 ▼</button><span></span>
+  </div>
   <button class="mission-chip bd" id="bMissionChip" hidden></button>
   <div class="ap-label fl" id="apLabel" hidden></div>
   <div class="left-ctrl fl">
@@ -79,6 +85,7 @@
         <button data-sas="pro">진행</button>
         <button data-sas="retro">역진행</button>
         <button data-sas="auto">자동</button>
+        <button data-sas="iss" id="issBtn" hidden>🛰 ISS</button>
       </div>
     </div>
     <div class="stick" id="stick" aria-label="기울이기 조이스틱"><div class="stick-knob" id="stickKnob"></div></div>

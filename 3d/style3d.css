@@ -112,3 +112,15 @@ body.mode-build .mission-chip.fl, body.mode-flight .mission-chip.bd { display: n
 .olabel.iss { color: #ffd27a; font-size: 12.5px; }
 .iss-win { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(255,210,122,.1); border: 1px solid rgba(255,210,122,.4); font-size: 13.5px; }
 .iss-win.open { background: rgba(54,194,122,.14); border-color: #36c27a; }
+
+/* ISS 랑데부·도킹 */
+.target-chip { position: absolute; left: 50%; transform: translateX(-50%); top: calc(92px + var(--safe-t)); max-width: min(94%, 560px); padding: 5px 12px; border-radius: 999px; background: rgba(20,27,49,.9); border: 1px solid #ffd27a; color: #ffe7b0; font-size: 12px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 3; }
+.target-chip.close { border-color: #36c27a; color: #b6f5d2; }
+.target-chip[hidden], .rcs-pad[hidden], #issBtn[hidden] { display: none; }
+.rcs-pad { position: absolute; right: 70px; bottom: calc(150px + var(--safe-b, 0px)); display: grid; grid-template-columns: repeat(3, 52px); gap: 4px; z-index: 3; }
+.rcs-pad button { height: 38px; padding: 0; font-size: 12px; background: rgba(20,27,49,.9); }
+.rcs-pad button.on { background: #ffb020; color: #1a1000; }
+#issBtn { color: #ffd27a; }
+.cargo-list { list-style: none; padding: 0; margin: 8px 0; }
+.cargo-list li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.cargo-list li.done { color: #7dff9b; }

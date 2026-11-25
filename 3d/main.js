@@ -8,7 +8,8 @@ import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js
 import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES, EXAMPLES3D, REAL_ROCKETS, LZ_LIST, SEA_DECK } from './physics3d.js';
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
 import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType, setLanding, buildISS } from './rocketModel.js';
-import { ISS_INFO, ISS_EL, ISS_PERIOD, issState, launchWindow, issFromPad } from './iss.js';
+import { ISS_INFO, ISS_EL, ISS_PERIOD, ISS_NORMAL, issState, launchWindow, issFromPad } from './iss.js';
+import { Rendezvous, RDV_LABEL, issPort, noseOf, canDock, holdDocked, undock } from './rendezvous.js';
 import { Builder } from './builder.js';
 import { RocketSound } from './sound.js';
 import { MISSIONS, evaluate, loadProgress, saveStars, unlocked, totalStars } from './missions.js';
@@ -167,7 +168,9 @@ composer.addPass(renderPass); composer.addPass(bloom); composer.addPass(new Outp
 
 // ───────── 우주(위성) 목록: 이 기기에 저장, 실제 시간에 맞춰 공전 ─────────
 let clockExtra = 0;                                   // 시간 배속으로 앞당긴 시간(ms)
-const uniNow = () => Date.now() + clockExtra;
+// 비행 중에는 로켓 물리 시간으로만 흐르는 우주 시계 (ISS·위성과 로켓이 정확히 같은 시간을 씀)
+let simClock = null;
+const uniNow = () => mode === 'flight' && simClock != null ? simClock : Date.now() + clockExtra;
 function seedSats() {
   // 처음 실행 때 보여 줄 샘플 위성 2개 (누구의 것인지 '샘플'로 표시)
   const t = Date.now(), mk = (name, type, alt, incl, phase) => {
@@ -195,6 +198,7 @@ function satView(s) {
 
 // ───────── 상태 ─────────
 let mode = 'build';
+let targetISS = store.get('rocket3d.target', 'free') === 'iss', rdv = null, docked = false, rcsDir = null;
 let rk = null, design = null, designName = '', autopilot = null, ended = false, map = false, warpIdx = 0, lastEvent = 0, shipSatId = null;
 const WARPS = [1, 2, 4, 10, 50, 200];
 let missionId = store.get('rocket3d.mission', MISSIONS[0].id);
@@ -207,7 +211,7 @@ function setMode(m) {
   mode = m; builder.active = m === 'build';
   document.body.classList.toggle('mode-build', m === 'build');
   document.body.classList.toggle('mode-flight', m === 'flight');
-  if (m === 'build') updateBuildChip();
+  if (m === 'build') { updateBuildChip(); if (simClock != null) { clockExtra = simClock - Date.now(); simClock = null; } }
   closeSheet();
   resize();
 }
@@ -236,6 +240,7 @@ function fitPadToRocket() {
 
 let modelSail = false, modelBalloon = 'none', lastStrike = -1;
 function startFlight(d, name) {
+  if (simClock == null) simClock = Date.now() + clockExtra;
   if (d) { design = normalizeDesign(d); designName = name || '나만의 로켓'; }
   weather = makeWeather(weatherKey);
   world.setWeather(weather);
@@ -251,7 +256,8 @@ function startFlight(d, name) {
   rebuildModel();
   fitPadToRocket();
   countdown = null; ignT = -1; wasIgnited = false;
-  mstate = { auto: false, sat: null, maxAp: 0, doneShown: false, stars: 0 };
+  mstate = { auto: false, sat: null, maxAp: 0, doneShown: false, stars: 0, docked: false, cargo: false };
+  rdv = null; docked = false; rcsDir = null;
   cam.dist = Math.max(30, rocketModel.height * 2.6); cam.el = 0.12; cam.az = 0.5;
   setMode('flight');
 }
@@ -269,9 +275,11 @@ function briefing(d, name) {
         `<p class="${go ? 'pass' : 'fail'}">${go ? '✔ 발사 가능 (GO)' : '⚠ 기준을 넘었어요 (NO-GO). 실제라면 발사를 미뤄요. 그래도 도전할 수 있지만 위험해요!'}</p>` +
         '<p class="muted">' + ({ clear: '바람이 약하고 맑아요.', cloudy: '구름층을 뚫고 올라가요. 실험실이 있으면 구름 속 물방울을 채집할 수 있어요.', windy: '강한 옆바람과 제트기류! 발사탑에 부딪히거나, 날개가 없으면 자세가 흔들릴 수 있어요.', storm: '비와 번개! 번개를 맞으면 장치가 잠시 멈출 수 있어요(아폴로 12호처럼).' }[w.key]) + '</p>'
         : '<p class="muted">발사할 때 날씨가 무작위로 정해져요.</p>') +
+      '<b>비행 목표</b><div class="qrow" id="trow"><button data-t="free" class="' + (targetISS ? '' : 'on') + '">🚀 자유 비행</button><button data-t="iss" class="' + (targetISS ? 'on' : '') + '">🛰 ISS 랑데부·도킹</button></div>' +
       '<b>🛰 국제우주정거장 발사 창</b><div class="iss-win ' + (launchWindow(uniNow()).open ? 'open' : '') + '">' + windowText(false) + '</div><p class="muted">ISS에 가려면 발사 창이 열렸을 때 쏴야 해요. 정거장이 너무 멀리 있으면 따라잡는 데 오래 걸려요.</p>',
       [{ label: '조립으로', fn: () => {} }].concat(launchWindow(uniNow()).open ? [] : [{ label: '⏩ 발사 창까지 기다리기', keep: true, fn: () => { clockExtra += launchWindow(uniNow()).wait * 1000 + 4000; render(); } }]).concat([{ label: '발사대로 ▶', primary: true, fn: () => startFlight(d, name) }]));
     document.querySelectorAll('#wrow button').forEach(b => b.onclick = () => { weatherKey = b.dataset.w; store.set('rocket3d.weather', weatherKey); render(); });
+    document.querySelectorAll('#trow button').forEach(b => b.onclick = () => { targetISS = b.dataset.t === 'iss'; store.set('rocket3d.target', b.dataset.t); render(); });
   };
   render();
 }
@@ -344,7 +352,11 @@ $('thMax').onclick = () => setThrottle(1);
 $('thCut').onclick = () => setThrottle(0);
 function setSas(m) {
   if (m === 'auto' && mode === 'flight') mstate.auto = true;
-  if (m === 'auto') autopilot = new Autopilot(rk); else { autopilot = null; if (rk) rk.sas = m; }
+  rdv = m === 'iss' && rk && rk.orbited && !docked ? new Rendezvous(rk) : (m === 'iss' ? rdv : null);
+  if (m === 'iss' && !rdv) { toast('먼저 궤도에 올라야 ISS로 갈 수 있어요. [자동]으로 올라가면 이어서 접근해요.', true, 2600); m = 'auto'; targetISS = true; }
+  if (m !== 'iss') rcsDir = null;
+  if (m === 'auto') autopilot = targetISS ? new Autopilot(rk, 82000, { planeN: ISS_NORMAL, pe: 78000 }) : new Autopilot(rk);
+  else { autopilot = null; if (rk) rk.sas = m === 'iss' ? 'off' : m; }
   document.querySelectorAll('.sas button').forEach(b => b.classList.toggle('on', b.dataset.sas === m));
 }
 document.querySelectorAll('.sas button').forEach(b => b.onclick = () => setSas(b.dataset.sas));
@@ -664,6 +676,7 @@ function updateHud(ob, warp) {
     : '날씨 ' + weather.icon + ' ' + weather.name + ' · 바람 ' + fmtN(weather.wind0) + ' m/s · ' + windowText(true);
   if (follow && follow.iss) $('stageInfo').textContent = '🛰 국제우주정거장 · 고도 ' + fmtDist(ISS_INFO.alt) + ' · ' + fmtN(V.len(follow.vel)) + ' m/s · 한 바퀴 ' + fmtN(ISS_PERIOD / 60, 1) + '분 · 내 로켓까지 ' + fmtDist(V.len(V.sub(follow.pos, rk.pos)));
   else if (follow) { const L = follow.lander, fa = V.len(follow.pos) - PLANET.R - L.ground; $('stageInfo').textContent = '🛬 ' + follow.name + ' · ' + (L.result ? (L.result.ok ? '착륙 성공!' : '착륙 실패') : PHASE_KO[L.phase] || L.phase) + ' · 고도 ' + fmtDist(Math.max(0, fa)) + ' · ' + fmtN(V.len(follow.vel)) + ' m/s · 연료 ' + Math.round(L.fuel) + ' kg'; }
+  updateTarget();
   const ap = $('apLabel'); ap.hidden = !autopilot; if (autopilot) ap.textContent = '자동 비행: ' + autopilot.label;
   if (Math.abs(rk.throttle * 100 - parseInt($('thVal').textContent, 10)) > 0.5) setThrottle(rk.throttle);
 }
@@ -783,6 +796,52 @@ $('bMissionChip').onclick = () => openMission(missionId);
 $('fMission').onclick = () => { const m = curMission(); if (m) toast('🎯 ' + m.goal + '\n보너스: ' + m.bonus.map(b => b.text).join(' · '), false, 3600); };
 updateBuildChip();
 
+// ───────── ISS 랑데부·도킹 화면 ─────────
+function setSasUi(m) { document.querySelectorAll('.sas button').forEach(b => b.classList.toggle('on', b.dataset.sas === m)); }
+// 미세 이동 방향 → 가속도 (ISS 기준: 앞 = ISS 쪽, 위 = 하늘 쪽)
+function rcsVec(dir) {
+  if (dir === 'stop') { const P = issPort(uniNow()), rv = V.sub(rk.vel, P.vel), l = V.len(rv); if (l < 0.01) { rcsDir = null; return null; } return V.mul(rv, -Math.min(0.5, l) / l); }
+  const P = issPort(uniNow()), up = V.norm(rk.pos), fwd = V.mul(P.vdir, -1), side = V.norm(V.cross(fwd, up));
+  const a = 0.35, m = { fwd: V.mul(fwd, a), back: V.mul(fwd, -a), up: V.mul(up, a), down: V.mul(up, -a), left: V.mul(side, -a), right: V.mul(side, a) };
+  return m[dir] || null;
+}
+document.querySelectorAll('#rcsPad button').forEach(b => {
+  const on = e => { e.preventDefault(); rcsDir = b.dataset.r; rdv = null; autopilot = null; setSasUi('off'); b.classList.add('on'); };
+  const off = () => { if (rcsDir !== 'stop') rcsDir = null; b.classList.remove('on'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointerleave', off); b.addEventListener('pointercancel', off);
+});
+$('fTarget').onclick = () => { if (rdv && rdv.phase === 'wait') { warpIdx = WARPS.length - 1; toast('⏩ 시간을 빨리 감아요 (전이 연소가 가까워지면 저절로 느려져요)', false, 2200); } };
+function updateTarget() {
+  const chip = $('fTarget'), show = (targetISS || rdv || docked) && rk.lifted && !map;
+  $('issBtn').hidden = !(targetISS || rdv) || docked || !rk.lifted;
+  const P = issPort(uniNow()), dist = V.len(V.sub(P.pos, noseOf(rk))), relV = V.len(V.sub(rk.vel, P.vel));
+  $('rcsPad').hidden = !show || docked || dist > 3000;
+  chip.hidden = !show;
+  if (!show) return;
+  chip.classList.toggle('close', dist < 3000 || docked);
+  chip.textContent = docked ? '🛰 ISS에 도킹 중 · 화물 ' + (mstate.cargo ? '전달 완료' : '전달 대기') :
+    '🛰 ISS ' + fmtDist(dist) + ' · 상대 ' + (relV < 10 ? relV.toFixed(2) : fmtN(relV)) + ' m/s' + (rdv ? ' · ' + (RDV_LABEL[rdv.phase] || '') + (rdv.hint ? ' · ' + rdv.hint : '') : dist < 3000 ? ' · 미세 이동 버튼으로 포트에 천천히 닿으세요' : ' · [🛰 ISS] 버튼: 자동 접근');
+}
+const CARGO = [['💧', '마실 물 400 kg'], ['🍱', '우주 식량 6개월분'], ['🔬', '과학 실험 장비'], ['👕', '옷·생활용품'], ['🛠', '교체 부품']];
+function onDocked() {
+  docked = true; mstate.docked = true; rdv = null; rcsDir = null; autopilot = null; setSasUi('off');
+  holdDocked(rk, uniNow()); sound.boom(0.25, 1);
+  const n = store.get('rocket3d.issVisits', 0) + 1; store.set('rocket3d.issVisits', n);
+  let k = 0;
+  const show = () => sheet('<h2>🛰 도킹 성공!</h2><p>' + esc(designName) + '이(가) 국제우주정거장에 연결됐어요. 승무원이 문을 열었어요.</p><ul class="cargo-list">' +
+    CARGO.map((c, i) => `<li class="${i < k ? 'done' : ''}">${i < k ? '✔' : c[0]} ${c[1]}</li>`).join('') + '</ul>' +
+    (k >= CARGO.length ? '<p class="fact">💡 실제로는 우주왕복선·소유즈·드래곤 같은 우주선이 몇 달마다 물과 식량을 실어 날라요. 정거장 안의 물은 대부분 땀과 소변까지 걸러 다시 써요.</p>' : '<p class="muted">화물을 정거장으로 옮기는 중…</p>'),
+    k >= CARGO.length ? [{ label: '도킹 유지', fn: () => {} }, { label: '분리하고 귀환 준비', primary: true, fn: doUndock }] : [{ label: '기다리기', keep: true }]);
+  show();
+  const step = () => { if (!docked) return; k++; if (k >= CARGO.length) { mstate.cargo = true; sound.beep(true); } show(); if (k < CARGO.length) setTimeout(step, 900); };
+  setTimeout(step, 1200);
+}
+function doUndock() {
+  if (!docked) return;
+  docked = false; undock(rk, uniNow());
+  toast('분리! 천천히 정거장에서 멀어져요.\n[역진행]으로 돌려 엔진을 켜면 고도가 낮아져 돌아올 수 있어요.', false, 4200);
+}
+
 // ───────── 메인 루프 ─────────
 let last = performance.now(), first = true;
 function frame(now) {
@@ -792,7 +851,7 @@ function frame(now) {
   if (mode === 'build') {
     builder.update();
     render(builder.scene, builder.camera);
-  } else flightFrame(dtReal);
+  } else flightFrame(dtReal, dtMs);
   if (first) { first = false; $('loading').hidden = true; }
   requestAnimationFrame(frame);
 }
@@ -801,7 +860,7 @@ function render(sc, cm) {
   else renderer.render(sc, cm);
 }
 
-function flightFrame(dtReal) {
+function flightFrame(dtReal, dtMs = dtReal * 1000) {
   const paused = !$('sheetBg').hidden && !ended;
   let warp = WARPS[warpIdx];
   if (rk.alt < PLANET.atm && warp > 4) warp = 4;
@@ -812,10 +871,20 @@ function flightFrame(dtReal) {
     rk.tiltDir = V.add(V.mul(axes.R, joy[0] || kx), V.mul(axes.F, joy[1] || ky));
     tickCountdown(dtReal);
     if (autopilot && rk.nextAction === 'launch') { if (!countdown) startCountdown(); }
-    else if (autopilot) autopilot.update();
+    else if (autopilot) {
+      autopilot.update();
+      // ISS 목표로 자동 비행하면 궤도에 오른 뒤 그대로 랑데부 도우미로 이어짐
+      if (targetISS && autopilot.phase === 'done' && rk.orbited && rk.nextAction !== 'deploy') { autopilot = null; rdv = new Rendezvous(rk); setSasUi('iss'); toast('🛰 궤도 진입! 이제 ISS를 따라잡아요.\n오른쪽 위 1× 버튼으로 시간을 빨리 감으면 금방이에요.', false, 4200); }
+    }
+    if (rdv && !docked) warp = Math.min(warp, rdv.update(uniNow()));
+    if (rcsDir && !docked) rk.rcs = rcsVec(rcsDir); else if (!rdv) rk.rcs = null;
     rk.update(dtReal * warp);
-    clockExtra += dtReal * (warp - 1) * 1000;
+    if (docked) holdDocked(rk, uniNow() + dtReal * warp * 1000);
+    else if (rk.lifted && (rdv || rcsDir || targetISS) && canDock(rk, uniNow() + dtReal * warp * 1000).ok) onDocked();
   }
+  // 우주 시계(ISS·위성)를 로켓 물리 시간과 정확히 맞춤: 멈춤이면 시계도 멈추고, 배속이면 그만큼 앞당김
+  if (!paused && simClock != null) simClock += dtReal * warp * 1000;
+  void dtMs;
   if (rk.version !== modelVersion || rk.sailOpen !== modelSail || rk.balloon !== modelBalloon) rebuildModel();
   const alt = rk.alt;
   // 로켓이 번개를 맞음
@@ -899,5 +968,5 @@ function flightFrame(dtReal) {
 
 resize();
 setMode('build');
-window.__sim = { get rk() { return rk; }, get tier() { return tierKey; }, get world() { return world; }, get mode() { return mode; }, builder, scene, renderer, camera, perf, applyTier, startBench, setSas, startFlight, setMode, get sats() { return sats; } }; // 테스트용
+window.__sim = { get rk() { return rk; }, uniNow, advance(dt) { for (let t = 0; t < dt; t += 0.1) { if (rdv && !docked) rdv.update(uniNow()); rk.update(0.1); simClock += 100; if (docked) holdDocked(rk, uniNow()); else if (canDock(rk, uniNow()).ok) { onDocked(); break; } } }, get rdv() { return rdv; }, get docked() { return docked; }, get tier() { return tierKey; }, get world() { return world; }, get mode() { return mode; }, builder, scene, renderer, camera, perf, applyTier, startBench, setSas, startFlight, setMode, get sats() { return sats; } }; // 테스트용
 requestAnimationFrame(frame);

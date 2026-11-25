@@ -513,8 +513,9 @@ export class Rocket3D {
   }
 
   update(dt) {
-    const n = Math.max(1, Math.round(dt / DT));
-    for (let i = 0; i < n; i++) this.step(DT);
+    // dt를 정확히 나눠서 진행 (반올림하면 로켓 시간이 우주 시계와 어긋나 ISS와 멀어짐)
+    const n = Math.max(1, Math.ceil(dt / DT - 1e-9)), h = dt / n;
+    for (let i = 0; i < n; i++) this.step(h);
     for (const d of this.debris) this.stepDebris(d, dt);
     this.debris = this.debris.filter(d => d.life > 0);
   }
@@ -624,7 +625,8 @@ export class Rocket3D {
       F = V.sub(F, V.mul(side, 0.5 * rho * V.len(side) * sideA));
     }
     const g = PLANET.mu / (r * r);
-    const a = V.sub(V.mul(F, 1 / m), V.mul(up, g));
+    let a = V.sub(V.mul(F, 1 / m), V.mul(up, g));
+    if (this.rcs && this.lifted) a = V.add(a, this.rcs);   // 자세 제어 추진기(RCS): 방향을 바꾸지 않고 앞뒤·좌우·위아래로 살짝 밀기
     if (!this.lifted && V.dot(a, up) <= 0) { this.vel = [0, 0, 0]; this.acc = 0; if (this.ignited) this.t += dt; return; }
     this.vel = V.add(this.vel, V.mul(a, dt));
     this.pos = V.add(this.pos, V.mul(this.vel, dt));
@@ -736,7 +738,8 @@ export class Rocket3D {
 
 // 자동 비행: 중력 선회로 궤도까지. 공기가 짙을 땐 받음각을 작게 유지
 export class Autopilot {
-  constructor(rk, targetAp = 65000) { this.rk = rk; this.phase = 'asc'; this.targetAp = targetAp; }
+  // opts.planeN: 맞출 궤도면의 법선(예: ISS 궤도면), opts.pe: 원형화를 끝낼 근지점
+  constructor(rk, targetAp = 65000, opts = {}) { this.rk = rk; this.phase = 'asc'; this.targetAp = targetAp; this.planeN = opts.planeN || null; this.peTarget = opts.pe || 50000; }
   get label() { return { balloon: '풍선 상승 중', asc: '상승·중력 선회', coast: '원지점까지 관성 비행', circ: '궤도 원형화 가속', done: '궤도 진입 완료' }[this.phase] || ''; }
   update() {
     const rk = this.rk;
@@ -747,7 +750,10 @@ export class Autopilot {
     if (rk.state !== 'flying') return;
     const hz = horizon(rk.pos), alt = rk.alt, ob = rk.lifted ? rk.orbit() : null;
     rk.sas = 'off'; rk.tiltDir = [0, 0, 0];
-    const aim = p => V.norm(V.add(V.mul(hz.up, Math.cos(p)), V.mul(hz.east, Math.sin(p))));
+    // 수평 방향: 보통은 동쪽, 궤도면이 정해지면 그 면 안의 진행 방향 (옆으로 벗어난 속도는 조금씩 되돌림)
+    let D = hz.east;
+    if (this.planeN) { const d0 = V.norm(V.cross(this.planeN, hz.up)), vn = V.dot(rk.vel, this.planeN), vh = Math.max(60, V.len(rk.vel)); D = V.norm(V.sub(d0, V.mul(this.planeN, Math.max(-0.35, Math.min(0.35, vn / vh * 1.5))))); }
+    const aim = p => V.norm(V.add(V.mul(hz.up, Math.cos(p)), V.mul(D, Math.sin(p))));
     const rel = V.sub(rk.vel, rk.wind), va = V.len(rel);
     const limitAoa = d => { if (va < 30 || rk.q < 1500) return d; const allow = 0.35 - 0.25 * Math.min(1, rk.q / 25000); return V.toward(V.mul(rel, 1 / va), d, allow); };
     // 최대 동압 근처에서는 실제 로켓처럼 추력을 줄임 (액체 엔진만)
@@ -761,8 +767,13 @@ export class Autopilot {
       if (rk.vertSpeed < (alt > PLANET.atm ? 150 : 10)) this.phase = 'circ';
     } else if (this.phase === 'circ') {
       // 내려가기 시작하면 살짝 위로 들어 고도를 지키며 가속
-      rk.fwd = limitAoa(aim(Math.PI / 2 - Math.max(-0.15, Math.min(0.5, -rk.vertSpeed / 300)))); rk.throttle = maxQThrottle;
-      if (ob && ob.pe > 50000) { rk.throttle = 0; this.phase = 'done'; }
+      // 원지점이 목표보다 높아지면 위로 들지 않고 살짝 아래로 (힘센 단이 궤도를 너무 높이지 않게)
+      const lift = ob && ob.ap > this.targetAp + 3000 ? -0.12 : Math.max(-0.15, Math.min(0.5, -rk.vertSpeed / 300));
+      rk.fwd = limitAoa(aim(Math.PI / 2 - lift));
+      // 목표 근지점에 가까워지면 추력을 줄여 원지점이 너무 높아지지 않게
+      rk.throttle = maxQThrottle * (ob ? Math.max(0.12, Math.min(1, (this.peTarget + 8000 - ob.pe) / 25000)) : 1);
+      // 목표 근지점에 닿거나, 이미 충분히 안전한 궤도인데 원지점만 높아지고 있으면 멈춤
+      if (ob && (ob.pe > this.peTarget || (ob.pe > PLANET.atm + 10000 && ob.ap > this.targetAp * 1.15))) { rk.throttle = 0; this.phase = 'done'; }
     }
     const act = rk.nextAction;
     if (act === 'boosters' && rk.active.boosters.every(b => !b.attached || b.fuel <= (b.reserve || 0))) rk.stage();
