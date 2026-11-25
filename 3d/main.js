@@ -7,7 +7,8 @@ import { OutputPass } from './vendor/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
 import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES, EXAMPLES3D, REAL_ROCKETS, LZ_LIST, SEA_DECK } from './physics3d.js';
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
-import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType, setLanding } from './rocketModel.js';
+import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType, setLanding, buildISS } from './rocketModel.js';
+import { ISS_INFO, ISS_EL, ISS_PERIOD, issState, launchWindow, issFromPad } from './iss.js';
 import { Builder } from './builder.js';
 import { RocketSound } from './sound.js';
 import { MISSIONS, evaluate, loadProgress, saveStars, unlocked, totalStars } from './missions.js';
@@ -141,7 +142,19 @@ function addBarge(pos) {   // 해상 착륙선: 넓은 갑판 + X + 양쪽 방�
   placeOnSurface(g, pos, SEA_DECK); landingGroup.add(g); barges.push(g);
 }
 function clearBarges() { barges.forEach(b => landingGroup.remove(b)); barges = []; }
-let follow = null;   // 따라가 보는 부스터 (분리된 단)
+let follow = null;   // 따라가 보는 부스터 (분리된 단) 또는 ISS
+
+// ───────── 국제우주정거장 ─────────
+const issObj = { name: '국제우주정거장', iss: true, pos: [0, 0, 0], vel: [0, 0, 0], fwd: [0, 1, 0] };
+let issModel = null;
+const issDot = new THREE.Sprite(new THREE.SpriteMaterial({ map: softTexture('rgba(255,220,140,1)', 'rgba(255,220,140,0)'), depthTest: true, fog: false })); issDot.visible = false;
+const issLine = (() => { const l = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(361 * 3), 3)), new THREE.LineBasicMaterial({ color: 0xffd27a, fog: false, transparent: true, opacity: 0.7 })); l.frustumCulled = false; l.visible = false; return l; })();
+const fmtWait = s => Math.floor(s / 60) + '분 ' + String(Math.floor(s % 60)).padStart(2, '0') + '초';
+function windowText(short) {
+  const w = launchWindow(uniNow());
+  if (w.open) return short ? 'ISS 발사 창 열림! (' + fmtWait(w.closesIn) + ' 남음)' : '🟢 지금 발사 창이 열렸어요! ' + fmtWait(w.closesIn) + ' 안에 북동쪽(방위 49°)으로 쏘면 ISS 가까이 갈 수 있어요.';
+  return short ? 'ISS 발사 창 ' + fmtWait(w.wait) + ' 뒤' : '⏳ 다음 발사 창까지 ' + fmtWait(w.wait) + ' · ISS는 지금 ' + issFromPad(uniNow());
+}
 const PHASE_KO = { flip: '뒤집기', boost: '역추진 (발사장으로)', coast: '활공 (격자 날개)', entry: '재진입 연소', land: '착륙 연소' };
 
 function clearImpacts() { impactViews.forEach(v => { if (v.sprite) { impactGroup.remove(v.sprite, v.ring); v.ring.geometry.dispose(); v.sprite.material.dispose(); } }); impactViews = []; }
@@ -255,8 +268,9 @@ function briefing(d, name) {
         crit.map(c => `<tr><td>${c.text}</td><td class="n">${c.now}</td><td class="n ${c.ok ? 'pass' : 'fail'}">${c.ok ? 'GO' : 'NO-GO'}</td></tr>`).join('') + '</tbody></table>' +
         `<p class="${go ? 'pass' : 'fail'}">${go ? '✔ 발사 가능 (GO)' : '⚠ 기준을 넘었어요 (NO-GO). 실제라면 발사를 미뤄요. 그래도 도전할 수 있지만 위험해요!'}</p>` +
         '<p class="muted">' + ({ clear: '바람이 약하고 맑아요.', cloudy: '구름층을 뚫고 올라가요. 실험실이 있으면 구름 속 물방울을 채집할 수 있어요.', windy: '강한 옆바람과 제트기류! 발사탑에 부딪히거나, 날개가 없으면 자세가 흔들릴 수 있어요.', storm: '비와 번개! 번개를 맞으면 장치가 잠시 멈출 수 있어요(아폴로 12호처럼).' }[w.key]) + '</p>'
-        : '<p class="muted">발사할 때 날씨가 무작위로 정해져요.</p>'),
-      [{ label: '조립으로', fn: () => {} }, { label: '발사대로 ▶', primary: true, fn: () => startFlight(d, name) }]);
+        : '<p class="muted">발사할 때 날씨가 무작위로 정해져요.</p>') +
+      '<b>🛰 국제우주정거장 발사 창</b><div class="iss-win ' + (launchWindow(uniNow()).open ? 'open' : '') + '">' + windowText(false) + '</div><p class="muted">ISS에 가려면 발사 창이 열렸을 때 쏴야 해요. 정거장이 너무 멀리 있으면 따라잡는 데 오래 걸려요.</p>',
+      [{ label: '조립으로', fn: () => {} }].concat(launchWindow(uniNow()).open ? [] : [{ label: '⏩ 발사 창까지 기다리기', keep: true, fn: () => { clockExtra += launchWindow(uniNow()).wait * 1000 + 4000; render(); } }]).concat([{ label: '발사대로 ▶', primary: true, fn: () => startFlight(d, name) }]));
     document.querySelectorAll('#wrow button').forEach(b => b.onclick = () => { weatherKey = b.dataset.w; store.set('rocket3d.weather', weatherKey); render(); });
   };
   render();
@@ -370,7 +384,7 @@ function fmtClock(sec) {
 }
 $('followBtn').onclick = () => {
   const ls = rk.debris.filter(d => d.lander);
-  const i = follow ? ls.indexOf(follow) : -1, nx = ls[i + 1] || null;
+  const i = follow && !follow.iss ? ls.indexOf(follow) : ls.length, nx = ls[i + 1] || null;
   follow = nx; $('followBtn').classList.toggle('on', !!follow);
   if (follow) { map = false; $('mapBtn').classList.remove('on'); toast('🛬 ' + follow.name + ' 따라가기 (한 번 더 누르면 다음 부스터 / 로켓으로)', false, 1800); }
 };
@@ -420,7 +434,7 @@ function showMenu() {
   } else {
     sheet('<h2>비행 메뉴</h2><p class="muted">로켓: ' + esc(designName) + '</p>' + qualityHtml() +
       '<p class="muted">조이스틱(WASD): 기울이기 · 화면 끌기: 시점 · 두 손가락/휠: 확대 · Space: 단 분리 · T: 자동 비행 · M: 지도</p>',
-      [{ label: '조립으로', fn: () => setMode('build') }, { label: '처음부터', fn: () => startFlight() }, { label: '성능 측정', fn: startBench }, { label: '계속하기', primary: true }]);
+      [{ label: '조립으로', fn: () => setMode('build') }, { label: '처음부터', fn: () => startFlight() }, follow && follow.iss ? { label: '🚀 내 로켓으로', fn: () => { follow = null; $('followBtn').classList.remove('on'); } } : { label: '🛰 ISS 보러 가기', fn: () => { follow = issObj; map = false; $('mapBtn').classList.remove('on'); $('followBtn').classList.add('on'); cam.dist = Math.max(cam.dist, 140); toast('🛰 국제우주정거장을 보고 있어요\n🛬 버튼이나 메뉴로 내 로켓에 돌아와요', false, 2600); } }, { label: '성능 측정', fn: startBench }, { label: '계속하기', primary: true }]);
   }
   bindQuality();
 }
@@ -429,7 +443,7 @@ $('bUniverse').onclick = () => showUniverse();
 
 function showUniverse() {
   const rows = sats.map(s => { const v = satView(s); return `<tr><td>${esc(s.name)}</td><td>${esc(s.owner)}</td><td class="n">${v.el ? fmtDist(v.el.pe) + ' ~ ' + fmtDist(v.el.ap) : '-'}</td><td class="n">${v.el ? fmtN(v.el.period / 60, 1) + '분' : '-'}</td></tr>`; }).join('');
-  sheet('<h2>🛰 우리 우주의 인공위성</h2><p class="muted">궤도에 올린 위성은 이 기기에 저장되어 실제 시간에 맞춰 계속 공전해요. (반 친구들과 함께 보는 공유 우주는 다음 단계에서 Firestore로 연결합니다.)</p>' +
+  sheet('<h2>🛰 국제우주정거장 (ISS)</h2><div class="bench-grid">' + ISS_INFO.facts.slice(0, 4).map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('') + '</div><p class="fact">💡 ' + ISS_INFO.story + '</p><p class="muted">게임 속 ISS: 고도 ' + fmtDist(ISS_INFO.alt) + ' · 한 바퀴 ' + fmtN(ISS_PERIOD / 60, 1) + '분 · 궤도 경사 51.6°</p><div class="iss-win">' + windowText(false) + '</div><h2>🛰 우리 우주의 인공위성</h2><p class="muted">궤도에 올린 위성은 이 기기에 저장되어 실제 시간에 맞춰 계속 공전해요. (반 친구들과 함께 보는 공유 우주는 다음 단계에서 Firestore로 연결합니다.)</p>' +
     '<table class="rank"><thead><tr><th>이름</th><th>주인</th><th class="n">고도</th><th class="n">한 바퀴</th></tr></thead><tbody>' + (rows || '<tr><td colspan="4">아직 위성이 없어요.</td></tr>') + '</tbody></table>',
     [{ label: '내 위성 모두 지우기', fn: () => { sats = sats.filter(s => s.owner !== '나'); store.set('rocket3d.sats', sats); satViews.forEach(v => { scene.remove(v.model, v.dot, v.line); }); satViews.clear(); } },
      { label: '관제 지도에서 보기', primary: true, fn: () => { const d = design || builder.design; startFlight(d, designName || builder.name); map = true; $('mapBtn').classList.add('on'); fitMap(true); } }]);
@@ -513,9 +527,9 @@ function updateCamera(hz) {
     camera.up.set(0, 0, 1); camera.lookAt(center);
   } else if (follow) {
     // 돌아오는 부스터 따라가기 (원점은 로켓 그대로, 카메라만 부스터로)
-    const fh = horizon(follow.pos), target = v3(V.sub(follow.pos, rk.pos)).add(v3(V.mul(follow.fwd, 5)));
+    const fh = horizon(follow.pos), target = v3(V.sub(follow.pos, rk.pos)).add(v3(V.mul(follow.fwd, follow.iss ? 2 : 5)));
     const el = Math.max(-1.3, cam.el), c = Math.cos(el);
-    camera.position.copy(target).add(v3(V.add(V.add(V.mul(fh.north, c * Math.cos(cam.az)), V.mul(fh.east, c * Math.sin(cam.az))), V.mul(fh.up, Math.sin(el)))).multiplyScalar(Math.max(cam.dist, 40)));
+    camera.position.copy(target).add(v3(V.add(V.add(V.mul(fh.north, c * Math.cos(cam.az)), V.mul(fh.east, c * Math.sin(cam.az))), V.mul(fh.up, Math.sin(el)))).multiplyScalar(Math.max(cam.dist, follow.iss ? 110 : 40)));
     camera.up.copy(v3(fh.up)); camera.lookAt(target);
   } else {
     const target = v3(V.mul(rk.fwd, rocketModel.height * 0.5));
@@ -566,6 +580,26 @@ function updateOrbitView() {
       const at = nu => { const r = ob.p / (1 + ob.e * Math.cos(nu)); return V.add(center, V.add(V.mul(ob.P, r * Math.cos(nu)), V.mul(ob.Q, r * Math.sin(nu)))); };
       if (ob.e < 1) addLabel(at(Math.PI), 'ap', '원지점 ' + fmtDist(ob.ap));
       if (ob.pe > 0) addLabel(at(0), 'pe', '근지점 ' + fmtDist(ob.pe));
+    }
+  }
+  // 국제우주정거장
+  {
+    const st = { pos: issObj.pos, vel: issObj.vel };
+    if (!issModel) { issModel = buildISS(tierKey); scene.add(issModel, issDot, issLine); }
+    const p = V.add(st.pos, center), focus = follow ? V.sub(follow.pos, rk.pos) : [0, 0, 0];
+    issModel.visible = !map && V.len(V.sub(p, focus)) < 120000;
+    if (issModel.visible) {
+      issModel.position.set(p[0], p[1], p[2]);
+      const X = v3(V.norm(st.vel)), Y = v3(V.norm(st.pos)), Z = new THREE.Vector3().crossVectors(X, Y);
+      tmpM.makeBasis(X, Y, Z); issModel.quaternion.setFromRotationMatrix(tmpM);
+    }
+    issDot.visible = issLine.visible = map;
+    if (map) {
+      const k = mapCam.dist * 0.011; issDot.scale.set(k, k, 1); issDot.position.set(p[0], p[1], p[2]);
+      fillOrbit(issLine, ISS_EL, center);
+      addLabel(p, 'iss', '🛰 ISS');
+    } else if (!follow || !follow.iss) {
+      const dd = V.len(p); if (dd < 300000 && rk.lifted) addLabel(p, 'iss', '🛰 ISS ' + fmtDist(dd));
     }
   }
   // 위성들
@@ -627,8 +661,9 @@ function updateHud(ob, warp) {
     : rk.balloon === 'rising' ? '풍선 상승 중 · 18 km에서 자동 분리 (바람 ' + fmtN(rk.windSpeed) + ' m/s)'
     : rk.isSatellite ? '인공위성 공전 중' + (ob && !ob.escape && ob.a > 0 ? ' · 한 바퀴 ' + fmtN(2 * Math.PI * Math.sqrt(ob.a ** 3 / PLANET.mu) / 60, 1) + '분 · 초록 선이 위성의 길' : '') + (rk.sailOpen ? ' · 태양 돛 펼침' : '')
     : rk.ignited ? (rk.q > 3000 ? '동압 ' + fmtN(rk.q / 1000) + ' kPa' + (rk.q > 60000 ? ' ⚠' : '') + ' · ' : '') + (rk.alt < 30000 ? '바람 ' + fmtN(rk.windSpeed) + ' m/s · ' : '') + fmtN(rk.acc, 1) + ' G' + (rk.science.points ? ' · 🔬' + rk.science.points : '')
-    : '날씨 ' + weather.icon + ' ' + weather.name + ' · 바람 ' + fmtN(weather.wind0) + ' m/s';
-  if (follow) { const L = follow.lander, fa = V.len(follow.pos) - PLANET.R - L.ground; $('stageInfo').textContent = '🛬 ' + follow.name + ' · ' + (L.result ? (L.result.ok ? '착륙 성공!' : '착륙 실패') : PHASE_KO[L.phase] || L.phase) + ' · 고도 ' + fmtDist(Math.max(0, fa)) + ' · ' + fmtN(V.len(follow.vel)) + ' m/s · 연료 ' + Math.round(L.fuel) + ' kg'; }
+    : '날씨 ' + weather.icon + ' ' + weather.name + ' · 바람 ' + fmtN(weather.wind0) + ' m/s · ' + windowText(true);
+  if (follow && follow.iss) $('stageInfo').textContent = '🛰 국제우주정거장 · 고도 ' + fmtDist(ISS_INFO.alt) + ' · ' + fmtN(V.len(follow.vel)) + ' m/s · 한 바퀴 ' + fmtN(ISS_PERIOD / 60, 1) + '분 · 내 로켓까지 ' + fmtDist(V.len(V.sub(follow.pos, rk.pos)));
+  else if (follow) { const L = follow.lander, fa = V.len(follow.pos) - PLANET.R - L.ground; $('stageInfo').textContent = '🛬 ' + follow.name + ' · ' + (L.result ? (L.result.ok ? '착륙 성공!' : '착륙 실패') : PHASE_KO[L.phase] || L.phase) + ' · 고도 ' + fmtDist(Math.max(0, fa)) + ' · ' + fmtN(V.len(follow.vel)) + ' m/s · 연료 ' + Math.round(L.fuel) + ' kg'; }
   const ap = $('apLabel'); ap.hidden = !autopilot; if (autopilot) ap.textContent = '자동 비행: ' + autopilot.label;
   if (Math.abs(rk.throttle * 100 - parseInt($('thVal').textContent, 10)) > 0.5) setThrottle(rk.throttle);
 }
@@ -801,7 +836,7 @@ function flightFrame(dtReal) {
   tEl.parentElement.classList.toggle('count', !!countdown);
   tEl.textContent = countdown ? 'T−' + Math.max(1, Math.floor(countdown.left)) : rk.ignited ? 'T+ ' + fmtClock(rk.t - ignT) : '대기';
   const ionOnly = rk.coreThrust > 0 && rk.active && rk.active.ids.some(id => PARTS[id].ion);
-  if (follow) sound.update({ thrust: follow.lander.burn, dens: Math.exp(-Math.max(0, followAlt) / 9000), dist: cam.dist, q: 0, ion: false, paused });
+  if (follow) sound.update({ thrust: follow.lander ? follow.lander.burn : 0, dens: Math.exp(-Math.max(0, followAlt) / 9000), dist: cam.dist, q: 0, ion: false, paused });
   else sound.update({ thrust: rk.thrustNow > 0 ? Math.min(1, 0.35 + 0.65 * rk.throttle + (rk.thrustNow - rk.coreThrust > 0 ? 0.3 : 0)) : 0, dens: Math.exp(-Math.max(0, alt) / 9000), dist: map ? 600 : cam.dist, q: rk.q, ion: ionOnly, paused });
 
   // 로켓·불꽃·낙하산
@@ -832,8 +867,8 @@ function flightFrame(dtReal) {
       if (!paused && L.burn > 0 && dAlt < 3000 && Math.random() < 0.6) world.emit(d.pos, d.vel, d.fwd, horizon(d.pos).up, dAlt, 2);
     }
   }
-  if (follow && !rk.debris.includes(follow)) { follow = null; $('followBtn').classList.remove('on'); }
-  $('followBtn').hidden = !rk.debris.some(d => d.lander);
+  if (follow && !follow.iss && !rk.debris.includes(follow)) { follow = null; $('followBtn').classList.remove('on'); }
+  $('followBtn').hidden = !rk.debris.some(d => d.lander) && !(follow && follow.iss);
 
   // 빛·안개
   const sunUp = SUN_DIR.dot(v3(hz.up));
@@ -848,6 +883,7 @@ function flightFrame(dtReal) {
   sun.position.copy(SUN_DIR).multiplyScalar(80); sun.target.position.set(0, 0, 0);
   sun.castShadow = tier.shadows && alt < 300 && !map;
 
+  { const st = issState(uniNow()); issObj.pos = st.pos; issObj.vel = st.vel; issObj.fwd = V.norm(st.pos); }   // ISS 위치를 카메라보다 먼저
   updateCamera(hz);
   if (!map && rk.q > 2000) { const sh = Math.min(0.25, rk.q / 300000 + rk.windSpeed / 400) * (weather.gust || 0.2); camera.position.x += (Math.random() - 0.5) * sh; camera.position.y += (Math.random() - 0.5) * sh; }
   rocketGroup.visible = !map;

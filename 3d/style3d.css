@@ -108,3 +108,7 @@ body.mode-build .mission-chip.fl, body.mode-flight .mission-chip.bd { display: n
 
 #followBtn.on { background: #36c27a; color: #04150c; }
 #followBtn[hidden] { display: none; }
+
+.olabel.iss { color: #ffd27a; font-size: 12.5px; }
+.iss-win { margin: 8px 0; padding: 8px 10px; border-radius: 10px; background: rgba(255,210,122,.1); border: 1px solid rgba(255,210,122,.4); font-size: 13.5px; }
+.iss-win.open { background: rgba(54,194,122,.14); border-color: #36c27a; }

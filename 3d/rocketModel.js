@@ -487,3 +487,36 @@ export function makeFlame(kind) {
   g.add(outer, inner);
   return g;
 }
+
+// 국제우주정거장 모델: +x = 진행 방향(모듈이 줄지어 있음), +y = 하늘 쪽, z = 긴 트러스(태양전지판 날개)
+export function buildISS(quality) {
+  const seg = quality === 'low' ? 10 : 18, g = new THREE.Group();
+  const white = mat('white'), foil = mat('foil'), dark = mat('darkMetal'), steel = mat('steel');
+  const arrayMat = new THREE.MeshStandardMaterial({ map: solarTex(), color: 0xf0c078, emissive: 0x4a3214, emissiveIntensity: 1, roughness: 0.35, metalness: 0.3, side: THREE.DoubleSide });
+  const mod = (len, r, x, m = white) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), m); c.rotation.z = Math.PI / 2; c.position.x = x; g.add(c); return c; };
+  // 가압 모듈 줄: 러시아 쪽(뒤) → 미국 쪽(앞), 앞 끝에 도킹 포트
+  mod(9, 1.6, -22); mod(10, 1.7, -12.5); mod(6, 1.3, -5); mod(9, 2.1, 3); mod(7, 2.1, 11); mod(3, 1.0, 16, steel);
+  const port = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.9, 1.2, seg), dark); port.rotation.z = Math.PI / 2; port.position.x = 18.1; g.add(port);
+  port.name = 'dockPort';
+  // 옆으로 붙은 실험 모듈 (일본·유럽)
+  for (const [z, len, r] of [[5.5, 8, 2.1], [-5, 6, 2.0]]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg), white); c.rotation.x = Math.PI / 2; c.position.set(9, 0, z + Math.sign(z) * len / 2 - Math.sign(z) * 1.5); g.add(c); }
+  // 러시아 모듈의 작은 태양전지판
+  for (const s of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.05, 9), arrayMat); p.position.set(-22, 0, s * 6.3); g.add(p); }
+  // 긴 트러스 (중심 모듈 위)
+  const truss = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.0, 74), new THREE.MeshStandardMaterial({ color: 0xc9ccd2, roughness: 0.5, metalness: 0.6, wireframe: false }));
+  truss.position.set(3, 3.6, 0); g.add(truss);
+  for (let k = -7; k <= 7; k++) { const b = new THREE.Mesh(new THREE.BoxGeometry(2.1, 2.1, 0.12), dark); b.position.set(3, 3.6, k * 5); g.add(b); }
+  // 큰 태양전지판 날개 8장 (양쪽 끝에 4장씩, 위아래로)
+  for (const sz of [-1, 1]) for (const zOff of [30, 39]) for (const sy of [-1, 1]) {
+    const wing = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.06, 16), arrayMat);
+    wing.rotation.x = Math.PI / 2; wing.position.set(3, 3.6 + sy * 9.5, sz * zOff); g.add(wing);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 19, 6), steel); mast.position.set(3, 3.6, sz * zOff); g.add(mast);
+  }
+  // 하얀 방열판
+  for (const sz of [-1, 1]) { const rad = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.05, 10), white); rad.position.set(3, 1.0, sz * 16); rad.rotation.x = 0.25 * sz; g.add(rad); }
+  // 로봇 팔(캐나다암2)
+  const arm1 = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 9, 8), white); arm1.position.set(5, 7.5, 6); arm1.rotation.x = 0.9; g.add(arm1);
+  g.traverse(o => { if (o.isMesh) o.castShadow = false; });
+  void foil;
+  return g;
+}
