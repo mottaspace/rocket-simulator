@@ -321,9 +321,10 @@ export function analyze3d(design) {
     if (kinds[kinds.length - 1] === 'dec') w.push({ t: '맨 아래에 분리기가 있어요.', fatal: true });
     if (hasK('balloon') && kinds[0] !== 'balloon') w.push({ t: '풍선은 맨 위에 달아야 해요.', fatal: true });
     if (hasK('sat') && segs.length && !isSatSeg(segs[segs.length - 1])) w.push({ t: '위성은 맨 위 단에 두고, 바로 아래에 분리기를 넣어야 궤도에서 떼어 낼 수 있어요.', fatal: false });
-    if (hasK('pod') && !hasK('chute')) w.push({ t: '낙하산이 없으면 캡슐이 안전하게 착륙할 수 없어요.', fatal: false });
-    if (hasK('pod') && !hasK('shield') && total > 2500) w.push({ t: '열 방패가 없으면 궤도에서 돌아올 때 타 버릴 수 있어요.', fatal: false });
-    if (!d.radial.some(r => PARTS[r.id].kind === 'fin')) w.push({ t: '날개가 없으면 기울일 때 자세가 흔들려요. 맨 아래 부품에 날개를 붙여 보세요.', fatal: false });
+    if (hasK('pod') && !hasK('chute') && !d.stack.some(id => PARTS[id].glider)) w.push({ t: '낙하산이 없으면 캡슐이 안전하게 착륙할 수 없어요.', fatal: false });
+    const glider = d.stack.some(id => PARTS[id].glider);   // 궤도선: 날개와 내열 타일이 있음
+    if (hasK('pod') && !hasK('shield') && !glider && total > 2500) w.push({ t: '열 방패가 없으면 궤도에서 돌아올 때 타 버릴 수 있어요.', fatal: false });
+    if (!glider && !d.radial.some(r => PARTS[r.id].kind === 'fin')) w.push({ t: '날개가 없으면 기울일 때 자세가 흔들려요. 맨 아래 부품에 날개를 붙여 보세요.', fatal: false });
   }
   return { stages, totalDv: total, mass, warnings: w, ok: !w.some(x => x.fatal) };
 }
@@ -380,7 +381,7 @@ export class Rocket3D {
   get height() { return this.segs.reduce((a, s) => a + s.ids.reduce((b, id) => b + PARTS[id].h, 0), 0); }
   hasPart(kind) { return this.segs.some(s => has(s, kind)); }
   get hasChute() { return this.segs.some(s => s.ids.includes('chute')); }
-  get hasFins() { return this.segs.some(s => s.fins.length); }
+  get hasFins() { return this.segs.some(s => s.fins.length || s.ids.some(id => PARTS[id].glider)); }
   get isSatellite() { return this.segs.length === 1 && isSatSeg(this.segs[0]); }
   get stageFuelFrac() {
     const s = this.active; if (!s) return 0;
@@ -460,7 +461,7 @@ export class Rocket3D {
           const d = { design: { stack: [b.id], radial: [] }, pos: V.add(this.pos, V.mul(dir, 1.3)), vel: V.add(this.vel, V.mul(dir, 4)), fwd: this.fwd.slice(), spin: (Math.random() - 0.5) * 0.8, life: 50 };
           this.debris.push(d);
           if (b.reserve && b.fuel > 0) { d.life = Infinity; d.spin = 0; d.name = '측면 부스터 ' + (k + 1); d.lander = makeLander(d, { dry: pb.mass, fuel: b.fuel, thrust: pb.thrust, isp: (pb.ispSL + pb.ispV) / 2, name: d.name, slot: k }); this.addImpact(d, d.name); }
-          else if (k === 0) this.addImpact(d, '측면 부스터 ' + b.n + '개');
+          else if (k === 0) this.addImpact(d, (pb.look === 'sts' ? '고체 부스터 ' : '측면 부스터 ') + b.n + '개');
         });
       }
       this.version++; this.log('측면 부스터 분리!');
@@ -478,14 +479,16 @@ export class Rocket3D {
         d.life = Infinity; d.spin = 0; d.name = this.stageNo + '단';
         d.lander = makeLander(d, { dry: seg.dry, fuel: seg.liquid, thrust: eng.reduce((a, p) => a + p.thrust, 0), isp: eng.reduce((a, p) => a + (p.ispSL + p.ispV) / 2, 0) / Math.max(1, eng.length), area: Math.max(1, ...seg.ids.map(id => (PARTS[id].w || 1) ** 2)), name: d.name });
       }
-      this.addImpact(this.debris[this.debris.length - 1], a === 'deploy' ? '위성을 올린 마지막 단' : this.stageNo + '단');
-      this.pos = V.add(this.pos, V.mul(this.fwd, h));
+      const isET = seg.ids.some(id => PARTS[id].look === 'et');
+      this.addImpact(this.debris[this.debris.length - 1], a === 'deploy' ? '위성을 올린 마지막 단' : isET ? '외부 탱크' : this.stageNo + '단');
+      // 외부 탱크 옆에 붙은 궤도선은 위로 옮겨 가지 않음 (탱크 아래쪽과 거의 같은 높이)
+      this.pos = V.add(this.pos, V.mul(this.fwd, seg.ids.some(id => PARTS[id].look === 'et') ? 0.9 : h));
       this.version++;
       if (a === 'deploy') {
         const ob = this.orbit(), ok = !ob.escape && ob.pe > PLANET.atm;
         this.deployedSat = { ok, ids: this.segs[0].ids.slice() };
         this.log(ok ? '위성 분리 성공! 궤도를 돌기 시작했어요.' : '위성을 분리했지만 궤도가 낮아 다시 떨어져요…', ok ? 'good' : 'bad');
-      } else this.log('단 분리!');
+      } else this.log(isET ? '외부 탱크 분리! 이제 궤도선의 작은 엔진(OMS)으로 궤도를 다듬어요.' : '단 분리!');
       return a;
     }
     if (a === 'chute') { this.chute = 'armed'; this.log('낙하산 준비 — 안전한 속도가 되면 자동으로 펴져요.'); }
@@ -645,7 +648,7 @@ export class Rocket3D {
     // 실패 판정
     if (this.q > LIMITS.maxQ * (this.aoa > Math.PI / 2 ? 1.6 : 1)) return this.destroy('maxq', '공기 압력이 너무 커서 기체가 부서졌어요! (최대 동압 ' + Math.round(this.q / 1000) + ' kPa)', '빠르게 날수록 공기가 세게 부딪혀요. 실제 로켓은 공기가 짙은 낮은 고도에서 일부러 추력을 줄여 "최대 동압(Max-Q)"을 넘기지 않아요.');
     if (this.q * Math.sin(this.aoa) > LIMITS.sideLoad && this.chute !== 'open') return this.destroy('aoa', '옆으로 받는 바람에 기체가 꺾였어요! (받음각 ' + Math.round(this.aoa * 57.3) + '°)', '빠를 때 로켓을 급하게 기울이면 옆면에 엄청난 공기 힘이 걸려요. 공기가 짙을 땐 날아가는 방향과 거의 같게 유지해야 해요.');
-    const shield = this.hasPart('shield');
+    const shield = this.hasPart('shield') || this.segs.some(s => s.ids.some(id => PARTS[id].glider));
     if (this.heat > (shield ? LIMITS.heatShield : LIMITS.heatNoShield) && this.vertSpeed < 0) return this.destroy('heat', '재진입 열에 기체가 타 버렸어요! (' + Math.round(this.heat) + ' °C)', '우주에서 돌아올 때는 공기가 압축되며 엄청 뜨거워져요. 캡슐 아래에 열 방패를 달고, 너무 가파르게 들어오지 않아야 해요.');
     // 발사탑 충돌 (강풍에 밀려서)
     if (nalt < PAD_TOWER.h && this.lifted) {
@@ -774,6 +777,7 @@ export const REAL_ROCKETS = [
   { key: "nuri", name: "누리호", design: {"stack": ["fairing", "satObs", "dec", "tankM", "engV", "dec", "tankL@13", "engL", "dec", "tankXL@13", "tankL@13", "engLx4"], "radial": [{"at": 11, "id": "fin", "n": 4}], "livery": {"body": "#f3f4f6", "accent": "#1b1d22", "flag": "KR"}, "flame": "kerosene"}, facts: {"country": "대한민국", "first": "2021년 (2022년 첫 성공)", "height": "47.2 m", "stages": "3단", "engines": "1단 75톤 엔진 4개 묶음 · 2단 1개 · 3단 7톤 1개"}, story: "우리 기술로 만든 첫 우주발사체예요. 1단은 75톤급 엔진 4개를 한 몸처럼 움직이게 묶었어요(클러스터링). 나로우주센터 제2발사대에서 발사해요." },
   { key: "soyuz", name: "소유즈", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "decTruss", "tankM", "engL", "decTruss", "tankXL", "tankL", "engSx4"], "radial": [{"at": 10, "id": "boosterCone", "n": 4}, {"at": 12, "id": "fin", "n": 4}], "livery": {"body": "#c3c8bb", "accent": "#e06a2c", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련·러시아", "first": "1966년", "height": "약 46 m", "stages": "부스터 4개 + 2단 + 3단", "engines": "부스터·중심 단 모두 4개 노즐"}, story: "역사상 가장 많이 발사된 로켓 계열(R-7)이에요. 지금도 우주비행사를 실어 날라요. 부스터 4개가 떨어지며 십자가처럼 퍼지는 모습을 '코롤료프 십자가'라고 불러요." },
   { key: "saturn", name: "새턴 5", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engV", "dec", "tankL@13", "engV", "dec", "tankL@20", "engLx5", "dec", "tankXL@20", "engLx5"], "radial": [{"at": 14, "id": "fin", "n": 4}], "livery": {"body": "#f4f4f2", "accent": "#151515", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (NASA)", "first": "1967년", "height": "110.6 m", "stages": "3단", "engines": "1단 F-1 엔진 5개 · 2단 J-2 5개 · 3단 J-2 1개"}, story: "아폴로 11호(1969)를 달로 보낸 로켓이에요. 13번 발사되는 동안 우주비행사를 한 번도 잃지 않았어요. 맨 위의 뾰족한 탑은 비상 탈출 타워예요." },
+  { key: "shuttle", name: "우주왕복선", design: {"stack": ["orbiter", "omsTank", "oms", "decET", "etTank", "ssme"], "radial": [{"at": 4, "id": "srbShuttle", "n": 2, "rot": -0.785}], "livery": {"body": "#f4f4f2", "accent": "#151515", "flag": "US"}, "flame": "hydrogen"}, facts: {"country": "미국 (NASA)", "first": "1981년 (컬럼비아호)", "height": "56 m", "stages": "고체 부스터 2개 + 외부 탱크 + 궤도선", "engines": "궤도선 주 엔진 3개 · 궤도 조종 엔진 2개"}, story: "날개 달린 우주선이 비행기처럼 활주로에 내려와 다시 쓰는 최초의 재사용 우주선이에요. 1981~2011년 135번 날았고, 국제우주정거장을 짓는 부품을 30번 넘게 실어 날랐어요. 고체 부스터는 낙하산으로 바다에 내려 건져서 다시 썼어요." },
   { key: "n1", name: "N1", design: {"stack": ["les", "chute", "pod", "shield", "tankS", "engS", "decTruss", "tankM@13-10", "engVx4", "decTruss", "tankL@16-13", "engVx7", "decTruss", "tankXL@20-16", "engSx30"], "radial": [{"at": 14, "id": "fin", "n": 4}], "livery": {"body": "#e6e3da", "accent": "#2b2b2b", "flag": "NONE"}, "flame": "kerosene"}, facts: {"country": "소련", "first": "1969년 (시험 4번)", "height": "105 m", "stages": "4단 + 달 착륙선", "engines": "1단 NK-15 엔진 30개"}, story: "소련이 달에 가려고 만든 거대한 로켓이에요. 1단 엔진 30개를 함께 맞추기가 너무 어려워 4번 모두 실패했어요. 엔진을 많이 묶을수록 제어가 어렵다는 교훈을 남겼어요." },
   { key: "f9", name: "팰컨 9", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2010년", "height": "약 70 m", "stages": "2단", "engines": "1단 멀린 엔진 9개 · 2단 1개"}, story: "1단이 다시 돌아와 착륙해서 수십 번이나 다시 써요(2015년 첫 착륙). 격자 날개로 방향을 잡고 착륙 다리를 펴고 내려와요." },
   { key: "fh", name: "팰컨 헤비", design: {"stack": ["fairing", "satCom", "dec", "tankL", "engS", "dec", "tankXL", "tankL", "engSx9"], "radial": [{"at": 6, "id": "boosterCore", "n": 2, "rot": 0.785}, {"at": 6, "id": "gridFin", "n": 4}, {"at": 7, "id": "legs", "n": 4}], "livery": {"body": "#f5f6f7", "accent": "#141518", "flag": "US"}, "flame": "kerosene"}, facts: {"country": "미국 (스페이스X)", "first": "2018년", "height": "약 70 m", "stages": "1단 코어 3개 + 2단", "engines": "코어마다 멀린 9개, 모두 27개"}, story: "팰컨 9 1단 세 개를 나란히 묶은 로켓이에요. 양옆 부스터 2개가 동시에 돌아와 나란히 착륙하는 장면으로 유명해요. 가운데 코어는 더 빠르고 멀리 날아가서 착륙이 훨씬 어려워요." },

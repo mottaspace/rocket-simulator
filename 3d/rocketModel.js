@@ -183,9 +183,41 @@ function strut(m, A, B, r) {
   return st;
 }
 
+
+// 우주왕복선 궤도선: 기수 +y, 배(검은 타일) -x, 꼬리 날개 +x
+const ORB_SSME = [[0.3, 0], [-0.1, 0.24], [-0.1, -0.24]];   // 주 엔진 3개 (x, z)
+const ORB_OMS = [[0.42, 0.36], [0.42, -0.36]];               // 궤도 조종 엔진 2개
+function buildOrbiter(h, seg) {
+  const g = new THREE.Group(), white = mat('white'), black = mat('black');
+  g.add(cyl(0.6, 0.62, 0.7, seg, 'white', 0));                                   // 꼬리 부분
+  g.add(cyl(0.55, 0.6, h - 2.1, seg, 'white', 0.7));                             // 동체
+  g.add(ogive(0.55, 1.4, seg, 'white', h - 1.4));                                // 기수
+  const belly = new THREE.Mesh(new THREE.CylinderGeometry(0.565, 0.6, h - 2.1, seg, 1, true, Math.PI, Math.PI), black); belly.position.y = 0.7 + (h - 2.1) / 2; g.add(belly);   // 배 쪽 타일
+  const nosecap = ogive(0.556, 1.4, seg, 'black', h - 1.4); nosecap.scale.set(1.01, 1, 1.01); nosecap.position.x = -0.02; g.add(nosecap);
+  // 삼각 날개 (양쪽)
+  for (const s of [-1, 1]) {
+    const sh = new THREE.Shape(); sh.moveTo(0.45 * s, 0.35); sh.lineTo(2.35 * s, 0.55); sh.lineTo(2.35 * s, 1.05); sh.lineTo(0.95 * s, 3.2); sh.lineTo(0.5 * s, 4.6); sh.closePath();
+    const geo = new THREE.ExtrudeGeometry(sh, { depth: 0.1, bevelEnabled: false });
+    const w = new THREE.Mesh(geo, white); w.rotation.y = -Math.PI / 2; w.position.x = -0.32; g.add(w);
+    const wb = new THREE.Mesh(geo, black); wb.rotation.y = -Math.PI / 2; wb.position.x = -0.43; wb.scale.z = 0.3; g.add(wb);
+  }
+  // 꼬리 날개
+  { const sh = new THREE.Shape(); sh.moveTo(0.5, 0.3); sh.lineTo(1.5, 0.05); sh.lineTo(1.95, 0.35); sh.lineTo(0.55, 2.1); sh.closePath();
+    const t = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: 0.08, bevelEnabled: false }), white); t.position.z = -0.04; g.add(t); }
+  // 화물칸 문 이음매, 조종실 창
+  const door = new THREE.Mesh(new THREE.BoxGeometry(0.04, h * 0.55, 0.03), mat('darkMetal')); door.position.set(0.56, h * 0.48, 0); g.add(door);
+  for (const z of [-0.18, 0, 0.18]) { const wnd = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.14), mat('glass')); wnd.position.set(0.43, h - 1.15, z); wnd.rotation.z = -0.5; g.add(wnd); }
+  // 엔진: 주 엔진 3개 + 궤도 조종 엔진 포드 2개
+  for (const [x, z] of ORB_SSME) { const b = bell(0.09, 0.24, 0.6, Math.max(10, seg >> 1), -0.55); b.position.x = x; b.position.z = z; g.add(b); }
+  for (const [x, z] of ORB_OMS) { const pod = cyl(0.17, 0.2, 1.0, 12, 'white', 0.2); pod.position.x = x; pod.position.z = z; g.add(pod); const b = bell(0.05, 0.11, 0.28, 10, -0.05); b.position.x = x; b.position.z = z; g.add(b); }
+  return g;
+}
+
 function partMesh(id, seg, P, opt, wd) {
   const p = PARTS[id], h = p.h, g = new THREE.Group();
   const W = wd || { b: 1, t: 1 };
+  if (p.look === 'hidden' || p.look === 'ssme' || p.look === 'oms') return g;   // 궤도선 안에 그려지는 부품
+  if (p.look === 'orbiter') { g.add(buildOrbiter(h, seg)); return g; }
   switch (p.kind) {
     case 'chute':
       g.add(cyl(RAD * 0.42, RAD * 0.6, h * 0.75, seg, P.plain, 0));
@@ -226,6 +258,13 @@ function partMesh(id, seg, P, opt, wd) {
       break;
     }
     case 'tank': {
+      if (p.look === 'et') {
+        // 주황색 단열재 외부 탱크: 위가 둥근 탄환 모양
+        const r = RAD * W.b, foam = new THREE.MeshStandardMaterial({ map: panelTex(), color: 0xc8692c, roughness: 0.95 });
+        g.add(cyl(r, r, h - 1.8, seg, foam, 0)); g.add(ogive(r, 1.8, seg, foam, h - 1.8));
+        g.add(cyl(r + 0.01, r + 0.01, 0.12, seg, foam, h * 0.42));
+        break;
+      }
       const rb = RAD * W.b, rt = RAD * W.t, rAt = f => rb + (rt - rb) * f;
       g.add(cyl(rt, rb, h, seg, P.body, 0));
       g.add(cyl(rAt(0.02) + 0.008, rb + 0.008, 0.16, seg, P.accent, 0));
@@ -258,6 +297,16 @@ function partMesh(id, seg, P, opt, wd) {
       break;
     }
     case 'srb': {
+      if (p.look === 'sts') {
+        // 왕복선 고체 부스터: 흰 몸통, 뾰족한 머리, 아래로 퍼진 치마
+        const r = p.r || BR;
+        g.add(cyl(r * 1.0, r * 1.3, 0.8, seg, 'white', 0));
+        g.add(cyl(r, r, h - 2.0, seg, P.plain, 0.8));
+        g.add(ogive(r, 1.2, seg, 'white', h - 1.2));
+        for (const f of [0.3, 0.6]) g.add(cyl(r + 0.01, r + 0.01, 0.12, seg, 'black', h * f));
+        g.add(bell(r * 0.4, r * 0.78, 0.5, seg, -0.4));
+        break;
+      }
       if (p.look === 'cone') {
         // 소유즈형 원뿔 부스터: 위가 뾰족, 아래에 작은 엔진 4개
         const r = p.r || BR, pts = [];
@@ -357,8 +406,19 @@ export function buildRocket(design, quality, opt = {}) {
     if (i === d.stack.length - 1 && PARTS[id].cluster > 1) {
       const L = clusterLayout(id, WS[i].b), sz = NOZZLE_SIZE(L.base) * Math.max(0.3, L.s * 1.1), R = RAD * WS[i].b;
       for (const [x, z] of L.pos) nozzles.push([x * R, y, z * R, sz, 'core']);
-    } else if (i === d.stack.length - 1 && (PARTS[id].kind === 'engine' || PARTS[id].kind === 'srb')) nozzles.push([0, y, 0, NOZZLE_SIZE(id), PARTS[id].ion ? 'ion' : 'core']);
+    } else if (i === d.stack.length - 1 && (PARTS[id].kind === 'engine' || PARTS[id].kind === 'srb') && !['ssme', 'oms'].includes(PARTS[id].look)) nozzles.push([0, y, 0, NOZZLE_SIZE(id), PARTS[id].ion ? 'ion' : 'core']);
     y += PARTS[id].h;
+  }
+  // 우주왕복선: 궤도선을 외부 탱크 옆(+x)에 붙이고, 주 엔진·궤도 조종 엔진 불꽃을 궤도선 꼬리에
+  let topY = y;
+  const oi = d.stack.findIndex(id => PARTS[id].look === 'orbiter'), ei = d.stack.findIndex(id => PARTS[id].look === 'et');
+  if (oi >= 0) {
+    const om = parts.find(p => p.stack === oi).mesh;
+    let ox = 0, oy = ys[oi];
+    if (ei > oi) { ox = RAD * WS[ei].b + 0.66; oy = ys[ei] + 0.9; om.position.set(ox, oy, 0); topY = Math.max(ys[ei] + PARTS[d.stack[ei]].h, oy + PARTS.orbiter.h); }
+    const last = PARTS[d.stack[d.stack.length - 1]].look;
+    if (last === 'ssme') for (const [x, z] of ORB_SSME) nozzles.push([ox + x, oy - 0.55, z, 0.7, 'core']);
+    if (last === 'oms') for (const [x, z] of ORB_OMS) nozzles.push([ox + x, oy - 0.05, z, 0.32, 'core']);
   }
   // 위 단의 이온 엔진도 불꽃 표시
   d.stack.forEach((id, i) => { if (i < d.stack.length - 1 && PARTS[id].ion) nozzles.push([0, ys[i], 0, 0.6, 'ion']); });
@@ -430,7 +490,7 @@ export function buildRocket(design, quality, opt = {}) {
     }
   }
   group.traverse(o => { if (o.isMesh) o.castShadow = true; });
-  return { group, height: y, nozzles, parts, coreR: RAD * (WS.length ? WS[WS.length - 1].b : 1) };
+  return { group, height: topY, nozzles, parts, coreR: RAD * (WS.length ? WS[WS.length - 1].b : 1) };
 }
 
 export function buildCanopy() {

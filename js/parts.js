@@ -40,6 +40,13 @@
     legs:    { name: '착륙 다리', short: '착륙 다리', mass: 150, h: 2.6, kind: 'fin', radial: true, look: 'legs', desc: '접혀 있다가 착륙 직전에 펴져요. 다시 쓰는 로켓의 발이에요.' },
     boosterCone: { name: '원뿔 액체 부스터', short: '원뿔 부스터', mass: 300, fuel: 1500, thrust: 120000, ispSL: 255, ispV: 300, h: 5.2, kind: 'srb', radial: true, look: 'cone', r: 0.5, desc: '소유즈의 원뿔형 부스터. 다 쓰고 떨어질 때 십자가처럼 퍼져요(코롤료프 십자가).' },
     boosterCore: { name: '측면 코어', short: '측면 코어', mass: 1300, fuel: 11000, thrust: 560000, ispSL: 270, ispV: 305, h: 12.5, kind: 'srb', radial: true, look: 'core', r: 0.625, desc: '몸통과 같은 굵기의 액체 로켓(엔진 9개). 팰컨 헤비처럼 양옆에 붙여요.' },
+    orbiter: { name: '우주왕복선 궤도선', short: '궤도선', mass: 5200, h: 7.5, kind: 'pod', look: 'orbiter', glider: true, desc: '날개 달린 우주선. 외부 탱크 옆에 붙어 올라가고, 돌아올 때는 비행기처럼 활공해 활주로에 내려요. 화물칸에 정거장 부품과 보급품을 실어요.' },
+    omsTank: { name: '궤도 조종 연료', short: 'OMS 연료', mass: 120, fuel: 1900, h: 0.05, kind: 'tank', look: 'hidden', hidden: true, desc: '궤도선 안에 있는 궤도 조종용 연료.' },
+    oms:     { name: '궤도 조종 엔진(OMS)', short: 'OMS', mass: 250, thrust: 52000, ispSL: 200, ispV: 316, h: 0.05, kind: 'engine', look: 'oms', hidden: true, desc: '궤도선 꼬리의 작은 엔진 2개. 외부 탱크를 버린 뒤 궤도를 다듬어요.' },
+    decET:   { name: '외부 탱크 분리 장치', short: '탱크 분리', mass: 40, h: 0.05, kind: 'dec', look: 'hidden', hidden: true, desc: '궤도선과 외부 탱크를 이어 줘요.' },
+    etTank:  { name: '외부 연료탱크', short: '외부 탱크', mass: 1500, fuel: 15500, h: 10.5, kind: 'tank', look: 'et', w: 1.35, wt: 1.35, desc: '주황색 단열재로 덮인 커다란 액체수소·액체산소 탱크. 궤도선의 주 엔진 3개가 이 연료를 써요. 다 쓰면 버려요.' },
+    ssme:    { name: '왕복선 주 엔진 ×3', short: '주 엔진', mass: 900, thrust: 300000, ispSL: 300, ispV: 360, h: 0.05, kind: 'engine', look: 'ssme', hidden: true, desc: '궤도선 꼬리의 주 엔진 3개(외부 탱크 연료 사용).' },
+    srbShuttle: { name: '왕복선 고체 부스터', short: '왕복선 부스터', mass: 800, fuel: 6200, thrust: 330000, ispSL: 235, ispV: 262, h: 10.2, kind: 'srb', radial: true, look: 'sts', r: 0.42, desc: '역사상 가장 힘센 고체 로켓 중 하나. 다 타면 낙하산을 펴고 바다에 떨어져 건져서 다시 썼어요.' },
     decTruss:{ name: '격자 연결부', short: '격자 연결부', mass: 70, h: 0.8, kind: 'dec', look: 'truss', desc: '뼈대만 있는 단 분리기. N1·소유즈처럼 윗단 엔진 불꽃이 빠져나갈 수 있어요.' },
   };
   // 엔진 클러스터(여러 개를 한 단에 묶기): 'engLx9'처럼 개수를 붙인 숨은 부품을 자동으로 만듦
