@@ -424,7 +424,7 @@ export class World {
     const colorAt = (e, n, out) => {
       const p = surfaceOffset(e, n), f = fbm2(e / 1400 + 50, n / 1400 + 50, 4), g = fbm2(e / 230, n / 230, 3);
       const dir = this.earth && toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]]));
-      if (this.earth && !(Math.hypot(e, n) < 1500 && sampleImg(this.earth.waterImg, dir)[0] > 128)) {
+      if (this.earth && !(Math.hypot(e, n) < 4500 && sampleImg(this.earth.waterImg, dir)[0] > 128)) {
         const [r, gg2, b] = sampleImg(this.earth.dayImg, dir);
         out.setRGB(r / 255, gg2 / 255, b / 255, THREE.SRGBColorSpace); out.multiplyScalar(0.85 + 0.25 * f + 0.1 * g);
       } else out.setRGB(0.10 + 0.12 * f + 0.05 * g, 0.16 + 0.09 * f, 0.055 + 0.03 * g);
@@ -440,7 +440,7 @@ export class World {
         else {
           // NASA 사진 색 + 잔무늬, 바다면 투명 (발사장 1.5 km 안은 늘 땅: 들판·숲 색)
           colorAt(e, n, c);
-          if (this.earth && d > 1500 && sampleImg(this.earth.waterImg, toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]])))[0] > 128) alpha = 0;
+          if (this.earth && d > 4500 && sampleImg(this.earth.waterImg, toEarthDir(V.norm([p[0], p[1] + PLANET.R, p[2]])))[0] > 128) alpha = 0;
         }
         col.push(c.r, c.g, c.b, alpha);
       }

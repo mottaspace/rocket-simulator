@@ -117,6 +117,39 @@ export const MISSIONS = [
     ],
     progress: c => { const n = c.rk.landings.filter(l => l.ok).length, f = c.rk.debris.filter(d => d.lander && !d.lander.result).length; return n ? '착륙 성공 ' + n + '개' + (f ? ' · 비행 중 ' + f : '') : f ? '부스터 착륙 비행 중 (🛬 버튼으로 따라가 보세요)' : '착륙 다리나 격자 날개를 단 단을 분리하세요'; },
   },
+  {
+    id: 'issFind', icon: '🛰', title: '정거장 찾기', goal: '국제우주정거장 5 km 안까지 다가가기',
+    learn: '같은 궤도라도 정거장이 앞에 있으면 바로 따라갈 수 없어요. 조금 낮은 궤도에서 더 빨리 돌아 따라잡은 뒤 올라가요(랑데부).',
+    rec: 'real:soyuz',
+    done: c => c.issMin < 5000,
+    bonus: [
+      { text: '발사 창이 열렸을 때 발사하기', ok: c => c.windowLaunch },
+      { text: '발사 후 1시간(게임 시간) 안에 다가가기', ok: c => c.issMin < 5000 && c.issAt < 3600 },
+    ],
+    progress: c => c.issMin < Infinity ? 'ISS까지 가장 가까이 ' + (c.issMin >= 10000 ? Math.round(c.issMin / 1000) + ' km' : (c.issMin / 1000).toFixed(1) + ' km') : '브리핑에서 [🛰 ISS 랑데부·도킹]을 고르고 발사 창에 쏘세요',
+  },
+  {
+    id: 'issDock', icon: '🔗', title: '도킹', goal: '국제우주정거장에 도킹하기',
+    learn: '도킹은 초속 몇 cm로 다가가 붙는 아주 섬세한 일이에요. 실제로는 레이저와 카메라로 거리를 재며 천천히 다가가요.',
+    rec: 'real:shuttle',
+    done: c => c.docked,
+    bonus: [
+      { text: '마지막 접근을 직접 조종하기 (미세 이동 버튼)', ok: c => c.manualDock },
+      { text: '우주왕복선으로 도킹하기', ok: c => c.real === 'shuttle' },
+    ],
+    progress: c => c.docked ? '도킹 성공!' : c.issMin < 3000 ? '포트까지 천천히 (미세 이동 또는 🛰 ISS 자동)' : '먼저 ISS에 다가가세요',
+  },
+  {
+    id: 'issSupply', icon: '📦', title: '보급 수송', goal: 'ISS에 화물을 전달하고 우주왕복선으로 활주로에 내리기',
+    learn: '우주왕복선은 엔진 없이 활공해서 단 한 번에 활주로에 내려야 해요. 그래서 역추진하는 시간과 장소를 아주 정확히 계산해요.',
+    rec: 'real:shuttle',
+    done: c => c.cargo && c.rk.state === 'landed' && !!c.rk.touchdown,
+    bonus: [
+      { text: '내려앉는 속도 초속 3.5 m 이하', ok: c => !!c.rk.touchdown && c.rk.touchdown.vs <= 3.5 },
+      { text: '활주로 중심선에서 15 m 안에 내리기', ok: c => !!c.rk.touchdown && Math.abs(c.rk.touchdown.cross) <= 15 },
+    ],
+    progress: c => !c.cargo ? (c.docked ? '화물을 옮기는 중' : 'ISS에 도킹해 화물을 전달하세요') : c.rk.rolling ? '활주로 감속 중' : '분리한 뒤 [🛬 귀환]으로 활주로에 내리세요',
+  },
 ];
 
 const KEY = 'rocket3d.missions';

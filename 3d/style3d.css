@@ -124,3 +124,6 @@ body.mode-build .mission-chip.fl, body.mode-flight .mission-chip.bd { display: n
 .cargo-list { list-style: none; padding: 0; margin: 8px 0; }
 .cargo-list li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
 .cargo-list li.done { color: #7dff9b; }
+
+#homeBtn { color: #7dff9b; }
+#homeBtn[hidden] { display: none; }

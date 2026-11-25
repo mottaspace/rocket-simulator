@@ -5,11 +5,12 @@ import { RenderPass } from './vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from './vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from './vendor/addons/postprocessing/OutputPass.js';
 import { RoomEnvironment } from './vendor/addons/environments/RoomEnvironment.js';
-import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES, EXAMPLES3D, REAL_ROCKETS, LZ_LIST, SEA_DECK } from './physics3d.js';
+import { PLANET, V, Rocket3D, Autopilot, horizon, satElements, satPosition, normalizeDesign, makeWeather, WEATHERS, launchCriteria, windSpeed, FLAMES, EXAMPLES3D, REAL_ROCKETS, LZ_LIST, SEA_DECK, RUNWAY } from './physics3d.js';
 import { World, TIERS, TIER_ORDER, SUN_DIR, softTexture, loadEarth, LAUNCH_SITE } from './world.js';
-import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType, setLanding, buildISS } from './rocketModel.js';
+import { buildRocket, buildCanopy, buildSatellite, makeFlame, flameMat, ionFlameMat, setFlameType, setLanding, buildISS, setGear, buildDragChute } from './rocketModel.js';
 import { ISS_INFO, ISS_EL, ISS_PERIOD, ISS_NORMAL, issState, launchWindow, issFromPad } from './iss.js';
 import { Rendezvous, RDV_LABEL, issPort, noseOf, canDock, holdDocked, undock } from './rendezvous.js';
+import { GlideHome, GLIDE_LABEL } from './glide.js';
 import { Builder } from './builder.js';
 import { RocketSound } from './sound.js';
 import { MISSIONS, evaluate, loadProgress, saveStars, unlocked, totalStars } from './missions.js';
@@ -134,6 +135,23 @@ for (const lz of LZ_LIST) (() => {   // 발사장 옆 착륙장: 콘크리트 �
   const top = new THREE.Mesh(new THREE.CircleGeometry(14, 40), new THREE.MeshStandardMaterial({ map: xTex, roughness: 0.9 })); top.rotation.x = -Math.PI / 2; top.position.y = 0.02; g.add(top);
   placeOnSurface(g, lz, 0.05); landingGroup.add(g);
 })();
+(() => {   // 우주왕복선 활주로: 지면 곡률을 따라 휘어진 띠 + 흰 선
+  const cv = document.createElement('canvas'); cv.width = 128; cv.height = 512; const c = cv.getContext('2d');
+  c.fillStyle = '#3d3f43'; c.fillRect(0, 0, 128, 512);
+  c.fillStyle = '#e9e9e6'; c.fillRect(4, 0, 4, 512); c.fillRect(120, 0, 4, 512);
+  for (let y = 0; y < 512; y += 64) c.fillRect(62, y, 4, 34);
+  for (let i = 0; i < 300; i++) { c.fillStyle = `rgba(0,0,0,${Math.random() * 0.12})`; c.fillRect(Math.random() * 128, Math.random() * 512, 6, 2); }
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.wrapT = THREE.RepeatWrapping;
+  const N = 48, pos = [], uv = [], idx = [], L = RUNWAY.len, W = RUNWAY.width;
+  for (let i = 0; i <= N; i++) for (const s of [-1, 1]) {
+    const a = -L / 2 + L * i / N, p = V.mul(V.norm(V.add(RUNWAY.center, V.add(V.mul(RUNWAY.dir, a), V.mul(RUNWAY.side, s * W / 2)))), PLANET.R + 0.3);
+    pos.push(p[0], p[1], p[2]); uv.push(s < 0 ? 0 : 1, a / 120);
+  }
+  for (let i = 0; i < N; i++) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
+  landingGroup.add(m);
+})();
 let barges = [];
 function addBarge(pos) {   // 해상 착륙선: 넓은 갑판 + X + 양쪽 방벽
   const g = new THREE.Group(), dark = new THREE.MeshStandardMaterial({ color: 0x2f3236, roughness: 0.8, metalness: 0.3 });
@@ -198,7 +216,7 @@ function satView(s) {
 
 // ───────── 상태 ─────────
 let mode = 'build';
-let targetISS = store.get('rocket3d.target', 'free') === 'iss', rdv = null, docked = false, rcsDir = null;
+let targetISS = store.get('rocket3d.target', 'free') === 'iss', rdv = null, docked = false, rcsDir = null, glide = null;
 let rk = null, design = null, designName = '', autopilot = null, ended = false, map = false, warpIdx = 0, lastEvent = 0, shipSatId = null;
 const WARPS = [1, 2, 4, 10, 50, 200];
 let missionId = store.get('rocket3d.mission', MISSIONS[0].id);
@@ -257,7 +275,8 @@ function startFlight(d, name) {
   fitPadToRocket();
   countdown = null; ignT = -1; wasIgnited = false;
   mstate = { auto: false, sat: null, maxAp: 0, doneShown: false, stars: 0, docked: false, cargo: false };
-  rdv = null; docked = false; rcsDir = null;
+  rdv = null; docked = false; rcsDir = null; glide = null;
+  gearT = 0; chuteT = 0; chuteGone = 0; tdShown = false;
   cam.dist = Math.max(30, rocketModel.height * 2.6); cam.el = 0.12; cam.az = 0.5;
   setMode('flight');
 }
@@ -352,6 +371,13 @@ $('thMax').onclick = () => setThrottle(1);
 $('thCut').onclick = () => setThrottle(0);
 function setSas(m) {
   if (m === 'auto' && mode === 'flight') mstate.auto = true;
+  if (m === 'home') {
+    if (!rk || !rk.gliding || docked) { toast('귀환 도우미는 우주왕복선 궤도선만 쓸 수 있어요 (도킹 중이면 먼저 분리)', true, 2600); return; }
+    glide = new GlideHome(rk); rdv = null; autopilot = null; rcsDir = null; rk.sas = 'off';
+    toast('🛬 귀환 시작! 활주로에 맞춰 역추진할 때를 계산해요.\n화면 위 표시줄을 누르면 시간을 빨리 감아요.', false, 3800);
+    setSasUi('home'); return;
+  }
+  if (glide) { glide = null; rk.glideCtl = false; rk.brake = 0; }
   rdv = m === 'iss' && rk && rk.orbited && !docked ? new Rendezvous(rk) : (m === 'iss' ? rdv : null);
   if (m === 'iss' && !rdv) { toast('먼저 궤도에 올라야 ISS로 갈 수 있어요. [자동]으로 올라가면 이어서 접근해요.', true, 2600); m = 'auto'; targetISS = true; }
   if (m !== 'iss') rcsDir = null;
@@ -728,6 +754,7 @@ function missionCtx() {
   const d = design || {};
   return {
     rk, auto: mstate.auto, weather: weather.key, real: d.real || null, sat: mstate.sat, maxAp: mstate.maxAp, impacts: impactViews,
+    issMin: mstate.issMin ?? Infinity, issAt: mstate.issAt ?? Infinity, docked: !!mstate.docked, manualDock: !!mstate.manualDock, cargo: !!mstate.cargo, windowLaunch: !!mstate.windowLaunch,
     hasFins: (d.radial || []).some(r => PARTS[r.id].kind === 'fin'),
     maxCluster: Math.max(1, ...(d.stack || []).map(id => PARTS[id].cluster || 1), ...(d.radial || []).map(r => PARTS[r.id].look === 'core' ? 9 : 1)),
   };
@@ -810,9 +837,17 @@ document.querySelectorAll('#rcsPad button').forEach(b => {
   const off = () => { if (rcsDir !== 'stop') rcsDir = null; b.classList.remove('on'); };
   b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointerleave', off); b.addEventListener('pointercancel', off);
 });
-$('fTarget').onclick = () => { if (rdv && rdv.phase === 'wait') { warpIdx = WARPS.length - 1; toast('⏩ 시간을 빨리 감아요 (전이 연소가 가까워지면 저절로 느려져요)', false, 2200); } };
+$('fTarget').onclick = () => { if (glide && (glide.phase === 'wait' || glide.phase === 'coast')) { warpIdx = WARPS.length - 1; toast('⏩ 시간을 빨리 감아요 (역추진·재진입 때는 저절로 느려져요)', false, 2200); return; } if (rdv && rdv.phase === 'wait') { warpIdx = WARPS.length - 1; toast('⏩ 시간을 빨리 감아요 (전이 연소가 가까워지면 저절로 느려져요)', false, 2200); } };
 function updateTarget() {
-  const chip = $('fTarget'), show = (targetISS || rdv || docked) && rk.lifted && !map;
+  const chip = $('fTarget');
+  $('homeBtn').hidden = !(rk.gliding && rk.lifted && rk.state === 'flying' && !docked && (rk.orbited || glide));
+  if (rk.lifted) { const dI = V.len(V.sub(issPort(uniNow()).pos, rk.pos)); if (dI < (mstate.issMin ?? Infinity)) { mstate.issMin = dI; if (dI < 5000 && mstate.issAt == null) mstate.issAt = rk.t; } }
+  if (glide && !map) {
+    chip.hidden = false; chip.classList.toggle('close', glide.phase === 'final' || glide.phase === 'flare' || glide.phase === 'roll');
+    chip.textContent = '🛬 귀환 · ' + (GLIDE_LABEL[glide.phase] || '') + (glide.hint ? ' · ' + glide.hint : '');
+    $('rcsPad').hidden = true; $('issBtn').hidden = true; return;
+  }
+  const show = (targetISS || rdv || docked) && rk.lifted && !map;
   $('issBtn').hidden = !(targetISS || rdv) || docked || !rk.lifted;
   const P = issPort(uniNow()), dist = V.len(V.sub(P.pos, noseOf(rk))), relV = V.len(V.sub(rk.vel, P.vel));
   $('rcsPad').hidden = !show || docked || dist > 3000;
@@ -824,7 +859,7 @@ function updateTarget() {
 }
 const CARGO = [['💧', '마실 물 400 kg'], ['🍱', '우주 식량 6개월분'], ['🔬', '과학 실험 장비'], ['👕', '옷·생활용품'], ['🛠', '교체 부품']];
 function onDocked() {
-  docked = true; mstate.docked = true; rdv = null; rcsDir = null; autopilot = null; setSasUi('off');
+  mstate.manualDock = !rdv; docked = true; mstate.docked = true; rdv = null; rcsDir = null; autopilot = null; setSasUi('off');
   holdDocked(rk, uniNow()); sound.boom(0.25, 1);
   const n = store.get('rocket3d.issVisits', 0) + 1; store.set('rocket3d.issVisits', n);
   let k = 0;
@@ -840,6 +875,41 @@ function doUndock() {
   if (!docked) return;
   docked = false; undock(rk, uniNow());
   toast('분리! 천천히 정거장에서 멀어져요.\n[역진행]으로 돌려 엔진을 켜면 고도가 낮아져 돌아올 수 있어요.', false, 4200);
+}
+
+// ───────── 우주왕복선 자세·착륙 바퀴·감속 낙하산 ─────────
+const dragChute = buildDragChute(); rocketGroup.add(dragChute);
+let gearT = 0, chuteT = 0, chuteGone = 0, tdShown = false;
+// 궤도선은 배(검은 타일)가 공기를 받는 쪽으로 (받음각·뱅크 표현). 활주로에서는 배가 아래로
+function orientRocket() {
+  if (!(rk.gliding && rk.lifted)) { orient(rocketGroup, rk.fwd, rk.pos); return; }
+  const Y = rk.fwd, up = V.norm(rk.pos), rel = V.sub(rk.vel, rk.wind || [0, 0, 0]), sp = V.len(rel);
+  let X = null;
+  if (sp > 30 && !rk.rolling) { const r = V.mul(rel, 1 / sp), b = V.sub(r, V.mul(Y, V.dot(r, Y))); if (V.len(b) > 0.05) X = V.mul(V.norm(b), -1); }
+  if (!X) { const u = V.sub(up, V.mul(Y, V.dot(up, Y))); X = V.len(u) > 1e-4 ? V.norm(u) : V.norm(V.cross(Y, [1, 0, 0])); }
+  const Xv = v3(X), Yv = v3(Y), Zv = new THREE.Vector3().crossVectors(Xv, Yv);
+  tmpM.makeBasis(Xv, Yv, Zv); rocketGroup.quaternion.setFromRotationMatrix(tmpM);
+}
+function updateGearChute(dt) {
+  if (!rocketModel) return;
+  const isOrb = rk.segs.some(s => s.ids.some(id => PARTS[id].glider));
+  // 바퀴: 최종 접근 중 고도 400 m 아래이거나 착지 뒤
+  const want = isOrb && (rk.rolling || (rk.state === 'landed' && rk.touchdown) || (rk.gliding && rk.lifted && rk.alt < 400 && (!glide || ['final', 'flare', 'roll'].includes(glide.phase)))) ? 1 : 0;
+  const prev = gearT; gearT += Math.sign(want - gearT) * Math.min(Math.abs(want - gearT), dt / 2.2);
+  if (gearT !== prev || rocketModel._gear !== gearT) { setGear(rocketModel.group, gearT); rocketModel._gear = gearT; }
+  if (want && prev === 0 && gearT > 0) toast('바퀴 내림! (착지 약 15초 전)', false, 1800);
+  // 착지 순간 타이어 연기
+  if (rk.touchdown && !tdShown) { tdShown = true; const up = horizon(rk.pos).up; for (let i = 0; i < 6; i++) world.emit(rk.pos, rk.vel, V.mul(rk.fwd, -1), up, 1.3, 2); sound.boom(0.3, 1); }
+  if (!rk.touchdown) tdShown = false;
+  // 감속 낙하산: 펴질 때 부풀고, 분리되면 뒤로 떨어져 사라짐
+  if (rk.dragChute) { chuteT = Math.min(1, chuteT + dt / 1.2); chuteGone = 0; }
+  else if (chuteT > 0) { chuteGone += dt; if (chuteGone > 2.5) chuteT = 0; }
+  dragChute.visible = chuteT > 0;
+  if (dragChute.visible) {
+    const k = rk.dragChute ? chuteT : Math.max(0.05, 1 - chuteGone / 2.5);
+    dragChute.scale.set(0.3 + 0.7 * k, 0.5 + 0.5 * k + (rk.dragChute ? 0 : chuteGone * 0.6), 0.3 + 0.7 * k);
+    dragChute.position.set(0.75, 0.3 - (rk.dragChute ? 0 : chuteGone * 6), 0);   // 꼬리 날개 아래에 묶여 뒤(-y)로 펼쳐짐
+  }
 }
 
 // ───────── 메인 루프 ─────────
@@ -876,8 +946,10 @@ function flightFrame(dtReal, dtMs = dtReal * 1000) {
       // ISS 목표로 자동 비행하면 궤도에 오른 뒤 그대로 랑데부 도우미로 이어짐
       if (targetISS && autopilot.phase === 'done' && rk.orbited && rk.nextAction !== 'deploy') { autopilot = null; rdv = new Rendezvous(rk); setSasUi('iss'); toast('🛰 궤도 진입! 이제 ISS를 따라잡아요.\n오른쪽 위 1× 버튼으로 시간을 빨리 감으면 금방이에요.', false, 4200); }
     }
+    if (glide) warp = Math.min(warp, glide.update(dtReal * warp));
     if (rdv && !docked) warp = Math.min(warp, rdv.update(uniNow()));
-    if (rcsDir && !docked) rk.rcs = rcsVec(rcsDir); else if (!rdv) rk.rcs = null;
+    if (rcsDir && !docked) rk.rcs = rcsVec(rcsDir); else if (!rdv && !glide) rk.rcs = null;
+    if (rk.ignited && mstate.windowLaunch == null) mstate.windowLaunch = launchWindow(uniNow()).open;
     rk.update(dtReal * warp);
     if (docked) holdDocked(rk, uniNow() + dtReal * warp * 1000);
     else if (rk.lifted && (rdv || rcsDir || targetISS) && canDock(rk, uniNow() + dtReal * warp * 1000).ok) onDocked();
@@ -909,7 +981,8 @@ function flightFrame(dtReal, dtMs = dtReal * 1000) {
   else sound.update({ thrust: rk.thrustNow > 0 ? Math.min(1, 0.35 + 0.65 * rk.throttle + (rk.thrustNow - rk.coreThrust > 0 ? 0.3 : 0)) : 0, dens: Math.exp(-Math.max(0, alt) / 9000), dist: map ? 600 : cam.dist, q: rk.q, ion: ionOnly, paused });
 
   // 로켓·불꽃·낙하산
-  orient(rocketGroup, rk.fwd, rk.pos);
+  orientRocket();
+  updateGearChute(dtReal);
   const vac = Math.min(1, Math.max(0, alt / PLANET.atm));
   for (const m of [flameMat, ionFlameMat]) { m.uniforms.uTime.value += dtReal; m.uniforms.uVac.value = vac; }
   const boosterOn = rk.thrustNow - rk.coreThrust > 0, coreOn = rk.coreThrust > 0, nCore = Math.max(1, flames.filter(f => f.userData.kind === 'core').length);
@@ -968,5 +1041,5 @@ function flightFrame(dtReal, dtMs = dtReal * 1000) {
 
 resize();
 setMode('build');
-window.__sim = { get rk() { return rk; }, uniNow, advance(dt) { for (let t = 0; t < dt; t += 0.1) { if (rdv && !docked) rdv.update(uniNow()); rk.update(0.1); simClock += 100; if (docked) holdDocked(rk, uniNow()); else if (canDock(rk, uniNow()).ok) { onDocked(); break; } } }, get rdv() { return rdv; }, get docked() { return docked; }, get tier() { return tierKey; }, get world() { return world; }, get mode() { return mode; }, builder, scene, renderer, camera, perf, applyTier, startBench, setSas, startFlight, setMode, get sats() { return sats; } }; // 테스트용
+window.__sim = { get rk() { return rk; }, uniNow, advance(dt) { for (let t = 0; t < dt && rk.state === 'flying'; t += 0.1) { if (glide) glide.update(0.1); if (rdv && !docked) rdv.update(uniNow()); rk.update(0.1); simClock += 100; if (docked) holdDocked(rk, uniNow()); else if (canDock(rk, uniNow()).ok) { onDocked(); break; } } }, get rdv() { return rdv; }, get glide() { return glide; }, get docked() { return docked; }, get tier() { return tierKey; }, get world() { return world; }, get mode() { return mode; }, builder, scene, renderer, camera, perf, applyTier, startBench, setSas, startFlight, setMode, get sats() { return sats; } }; // 테스트용
 requestAnimationFrame(frame);

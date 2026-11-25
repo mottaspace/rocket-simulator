@@ -210,6 +210,14 @@ function buildOrbiter(h, seg) {
   // 엔진: 주 엔진 3개 + 궤도 조종 엔진 포드 2개
   for (const [x, z] of ORB_SSME) { const b = bell(0.09, 0.24, 0.6, Math.max(10, seg >> 1), -0.55); b.position.x = x; b.position.z = z; g.add(b); }
   for (const [x, z] of ORB_OMS) { const pod = cyl(0.17, 0.2, 1.0, 12, 'white', 0.2); pod.position.x = x; pod.position.z = z; g.add(pod); const b = bell(0.05, 0.11, 0.28, 10, -0.05); b.position.x = x; b.position.z = z; g.add(b); }
+  // 착륙 바퀴: 앞바퀴 1개(기수 아래) + 주바퀴 2개(날개 뿌리 아래). 배(-x) 쪽으로 내려옴
+  const tire = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.9 });
+  for (const [y, z, nose] of [[h - 1.75, 0, true], [1.55, 0.62, false], [1.55, -0.62, false]]) {
+    const leg = new THREE.Group(); leg.position.set(-0.52, y, z); leg.userData.gear = 1; leg.visible = false; g.add(leg);
+    const strut = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 0.62, 8), mat('steel')); strut.rotation.z = Math.PI / 2; strut.position.x = -0.31; leg.add(strut);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.03, nose ? 0.5 : 0.7, 0.32), mat('black')); door.position.set(-0.08, 0, nose ? 0.2 : (z > 0 ? 0.24 : -0.24)); door.rotation.x = nose ? 0.9 : (z > 0 ? 0.9 : -0.9); leg.add(door);
+    for (const dz of [-0.09, 0.09]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.09, 14), tire); w.rotation.x = Math.PI / 2; w.position.set(-0.62, 0, dz); leg.add(w); }
+  }
   return g;
 }
 
@@ -491,6 +499,24 @@ export function buildRocket(design, quality, opt = {}) {
   }
   group.traverse(o => { if (o.isMesh) o.castShadow = true; });
   return { group, height: topY, nozzles, parts, coreR: RAD * (WS.length ? WS[WS.length - 1].b : 1) };
+}
+
+// 바퀴 내리기 (0 = 접힘, 1 = 다 내려옴)
+export function setGear(group, t) {
+  group.traverse(o => { if (o.userData.gear) { o.visible = t > 0.02; o.scale.set(Math.max(0.02, t), 1, 1); } });
+}
+// 우주왕복선 감속 낙하산: 꼬리 날개 아래에서 뒤로 끌려 나옴 (원점 = 묶인 곳, -y 쪽으로 펼쳐짐)
+export function buildDragChute() {
+  const g = new THREE.Group();
+  const tex = canvasTex(256, 64, (c, w, h) => { for (let i = 0; i < 12; i++) { c.fillStyle = i % 2 ? '#f1ede4' : '#d9732f'; c.fillRect(i * w / 12, 0, w / 12, h); } });
+  const R = 3.2, D = 14;
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(R, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2.3), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, side: THREE.DoubleSide }));
+  dome.rotation.x = Math.PI; dome.position.y = -D - R * 0.55; g.add(dome);   // 볼록한 쪽이 뒤로, 입구가 궤도선 쪽
+  const pts = [];
+  for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; pts.push(0, 0, 0, Math.cos(a) * R * 0.98, -D, Math.sin(a) * R * 0.98); }
+  g.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)), new THREE.LineBasicMaterial({ color: 0xe8e4da, transparent: true, opacity: 0.8 })));
+  g.visible = false;
+  return g;
 }
 
 export function buildCanopy() {

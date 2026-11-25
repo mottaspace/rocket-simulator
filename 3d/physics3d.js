@@ -74,6 +74,32 @@ const PAD_POS = [0, PLANET.R, 0];
 const lzAt = (e, n) => { const hz = horizon(PAD_POS); return V.mul(V.norm(V.add(PAD_POS, V.add(V.mul(hz.east, e), V.mul(hz.north, n)))), PLANET.R); };
 export const LZ_LIST = [lzAt(900, -900), lzAt(1000, -800)];   // 착륙장 2곳 (팰컨 헤비 부스터 2개가 나란히 내림)
 export const LZ_POS = LZ_LIST[0];
+
+// ───────── 우주왕복선 활공 ─────────
+// 활주로: 발사장에서 궤도가 지나가는 방향(북동쪽, 방위 약 49°)과 나란히, 발사장 남서쪽 2.6 km
+export const GEAR_H = 1.35;        // 바퀴를 내렸을 때 궤도선 꼬리 아래(원점)가 땅에서 떠 있는 높이 (m)
+export const GLIDE_S = 18;          // 궤도선 날개 넓이 (m², 1/16 지구에 맞춤)
+export const RUNWAY = (() => {
+  const hz = horizon(PAD_POS), az = Math.asin(Math.min(1, Math.cos(51.6 * Math.PI / 180) / Math.cos(34.43 * Math.PI / 180)));
+  const H = V.norm(V.add(V.mul(hz.north, Math.cos(az)), V.mul(hz.east, Math.sin(az))));
+  const center = V.mul(V.norm(V.add(PAD_POS, V.mul(H, -2600))), PLANET.R), up = V.norm(center);
+  const dir = V.norm(V.sub(H, V.mul(up, V.dot(H, up))));
+  return { center, dir, side: V.norm(V.cross(dir, up)), len: 2400, width: 80 };
+})();
+// 활주로 기준 위치: along = 활주로 방향(+는 발사장 쪽 끝), cross = 옆
+export function runwayLocal(pos) {
+  const d = V.sub(V.mul(V.norm(pos), PLANET.R), RUNWAY.center);
+  return { along: V.dot(d, RUNWAY.dir), cross: V.dot(d, RUNWAY.side) };
+}
+// 날개 공기력: 받음각이 클수록 양력↑(45°에서 최대), 항력도 커짐. 에어브레이크는 항력만 키움
+export function glideAero(rho, rel, fwd, brake) {
+  const va = V.len(rel); if (va < 0.01 || rho <= 0) return { F: [0, 0, 0], CL: 0, aoa: 0 };
+  const r = V.mul(rel, 1 / va), aoa = V.angle(fwd, r), n0 = V.sub(fwd, V.mul(r, V.dot(fwd, r))), nl = V.len(n0);
+  const qS = 0.5 * rho * va * va * GLIDE_S, CL = 0.95 * Math.sin(2 * Math.min(aoa, Math.PI / 2)), CD = 0.05 + 1.6 * Math.sin(aoa) ** 2 + (brake || 0) * 0.3;
+  let F = V.mul(r, -qS * CD);
+  if (nl > 1e-6) F = V.add(F, V.mul(n0, qS * CL / nl));
+  return { F, CL, aoa };
+}
 export const SEA_DECK = -29;     // 해상 착륙선 갑판 높이 (바다 표면이 행성 반지름보다 30 m 낮게 그려짐)
 const surfDist = (a, b) => PLANET.R * Math.acos(Math.max(-1, Math.min(1, V.dot(V.norm(a), V.norm(b)))));
 
@@ -381,6 +407,7 @@ export class Rocket3D {
   get height() { return this.segs.reduce((a, s) => a + s.ids.reduce((b, id) => b + PARTS[id].h, 0), 0); }
   hasPart(kind) { return this.segs.some(s => has(s, kind)); }
   get hasChute() { return this.segs.some(s => s.ids.includes('chute')); }
+  get gliding() { return this.segs.length === 1 && this.segs[0].ids.some(id => PARTS[id].glider); }
   get hasFins() { return this.segs.some(s => s.fins.length || s.ids.some(id => PARTS[id].glider)); }
   get isSatellite() { return this.segs.length === 1 && isSatSeg(this.segs[0]); }
   get stageFuelFrac() {
@@ -530,6 +557,7 @@ export class Rocket3D {
   }
 
   steer(dt, rel, q) {
+    if (this.glideCtl && this.gliding) return;   // 귀환 도우미가 자세를 직접 정함
     const hz = horizon(this.pos);
     if (this.chute === 'open') { this.fwd = V.toward(this.fwd, hz.up, dt * 1.5); return; }
     if (!this.lifted || this.balloon === 'rising') { this.fwd = hz.up; return; }
@@ -573,6 +601,22 @@ export class Rocket3D {
       return;
     }
 
+    // 활주로 위를 달리며 멈추는 중 (바퀴 브레이크 + 감속 낙하산)
+    if (this.rolling) {
+      const hz2 = horizon(this.pos);
+      let v = V.sub(this.vel, V.mul(hz2.up, V.dot(this.vel, hz2.up))); const sp = V.len(v);
+      // 바퀴 브레이크 + 감속 낙하산(착지 1초 뒤 펼침, 초속 25 m 아래에서 분리)
+      const since = this.t - this.touchdown.t;
+      if (!this.dragChute && since > 1.0 && sp > 25 && !this.chuteDone) { this.dragChute = true; this.log('감속 낙하산 펼침!', 'info'); }
+      if (this.dragChute && sp <= 25) { this.dragChute = false; this.chuteDone = true; this.log('감속 낙하산 분리 — 바퀴 브레이크로 멈춰요', 'info'); }
+      const nsp = Math.max(0, sp - (2.8 + (this.dragChute ? 4.6 : 0)) * dt);
+      v = sp > 0 ? V.mul(v, nsp / sp) : [0, 0, 0];
+      this.vel = v; this.pos = V.mul(V.norm(V.add(this.pos, V.mul(v, dt))), PLANET.R + GEAR_H);
+      if (sp > 0.5) this.fwd = V.toward(this.fwd, V.norm(V.add(V.mul(v, 1 / Math.max(sp, 1e-6)), V.mul(hz2.up, 0.05))), dt);
+      this.t += dt; this.q = 0; this.thrustNow = 0; this.coreThrust = 0;
+      if (nsp <= 0.3) { this.rolling = false; this.vel = [0, 0, 0]; this.state = 'landed'; this.impact = this.touchdown.vs; this.log('궤도선이 활주로에 멈췄어요! 무사 귀환 (내려앉는 속도 ' + this.touchdown.vs.toFixed(1) + ' m/s)', 'good', { fact: '우주왕복선은 엔진 없이 거대한 글라이더처럼 내려와요. 기회는 단 한 번이라 재진입 전에 계산을 아주 정확히 해요.' }); }
+      return;
+    }
     const rel = V.sub(this.vel, this.wind), va = V.len(rel);
     this.q = 0.5 * rho * va * va;
     this.aoa = va > 5 ? V.angle(this.fwd, rel) : 0;
@@ -611,7 +655,10 @@ export class Rocket3D {
     if (this.chute === 'armed' && alt < CHUTE_SAFE_ALT && this.speed < CHUTE_SAFE_SPEED && rho > 0) { this.chute = 'open'; this.log('낙하산이 펴졌어요!', 'good'); }
 
     // 공기 저항: 앞면(진행 방향)과 옆면(옆바람)으로 나눠 계산
-    if (rho > 0 && va > 0.01) {
+    if (this.gliding && rho > 0 && va > 0.01) {
+      const ga = glideAero(rho, rel, this.fwd, this.brake);
+      F = V.add(F, ga.F); this.CL = ga.CL;
+    } else if (rho > 0 && va > 0.01) {
       const top = this.segs.length ? PARTS[this.segs[this.segs.length - 1].ids[0]] : null;
       const pointy = top && (top.kind === 'nose' || top.kind === 'fairing');
       const backward = this.aoa > Math.PI / 2; // 열 방패가 앞: 뭉툭한 면이 공기를 받아 저항이 큼
@@ -649,7 +696,7 @@ export class Rocket3D {
 
     // 실패 판정
     if (this.q > LIMITS.maxQ * (this.aoa > Math.PI / 2 ? 1.6 : 1)) return this.destroy('maxq', '공기 압력이 너무 커서 기체가 부서졌어요! (최대 동압 ' + Math.round(this.q / 1000) + ' kPa)', '빠르게 날수록 공기가 세게 부딪혀요. 실제 로켓은 공기가 짙은 낮은 고도에서 일부러 추력을 줄여 "최대 동압(Max-Q)"을 넘기지 않아요.');
-    if (this.q * Math.sin(this.aoa) > LIMITS.sideLoad && this.chute !== 'open') return this.destroy('aoa', '옆으로 받는 바람에 기체가 꺾였어요! (받음각 ' + Math.round(this.aoa * 57.3) + '°)', '빠를 때 로켓을 급하게 기울이면 옆면에 엄청난 공기 힘이 걸려요. 공기가 짙을 땐 날아가는 방향과 거의 같게 유지해야 해요.');
+    if (this.q * Math.sin(this.aoa) > LIMITS.sideLoad && this.chute !== 'open' && !this.gliding) return this.destroy('aoa', '옆으로 받는 바람에 기체가 꺾였어요! (받음각 ' + Math.round(this.aoa * 57.3) + '°)', '빠를 때 로켓을 급하게 기울이면 옆면에 엄청난 공기 힘이 걸려요. 공기가 짙을 땐 날아가는 방향과 거의 같게 유지해야 해요.');
     const shield = this.hasPart('shield') || this.segs.some(s => s.ids.some(id => PARTS[id].glider));
     if (this.heat > (shield ? LIMITS.heatShield : LIMITS.heatNoShield) && this.vertSpeed < 0) return this.destroy('heat', '재진입 열에 기체가 타 버렸어요! (' + Math.round(this.heat) + ' °C)', '우주에서 돌아올 때는 공기가 압축되며 엄청 뜨거워져요. 캡슐 아래에 열 방패를 달고, 너무 가파르게 들어오지 않아야 해요.');
     // 발사탑 충돌 (강풍에 밀려서)
@@ -668,6 +715,15 @@ export class Rocket3D {
       this.log('연료가 바닥났어요 — 궤도 진입 실패 (수평 속도 ' + Math.max(0, Math.round(need - this.horizSpeed)) + ' m/s 부족)', 'bad');
     }
     this.science_();
+    if (this.lifted && nalt <= GEAR_H && this.gliding) {
+      const rw = runwayLocal(this.pos), onRw = Math.abs(rw.along) < RUNWAY.len / 2 && Math.abs(rw.cross) < RUNWAY.width / 2, vs = -this.vertSpeed;
+      this.pos = V.mul(V.norm(this.pos), PLANET.R + GEAR_H);
+      if (onRw && vs < 6 && this.speed < 190) { this.rolling = true; this.touchdown = { vs, speed: this.speed, along: rw.along, cross: rw.cross, t: this.t }; this.log('터치다운! 바퀴가 활주로에 닿았어요 (초속 ' + vs.toFixed(1) + ' m로 내려앉음)', 'good'); return; }
+      this.impact = this.speed; this.vel = [0, 0, 0]; this.state = 'crashed';
+      this.fail = this.fail || { code: 'ground', text: onRw ? '활주로에 너무 세게 내려앉았어요 (초속 ' + vs.toFixed(1) + ' m)' : '활주로를 벗어나 땅에 닿았어요 (활주로까지 ' + Math.round(Math.hypot(Math.max(0, Math.abs(rw.along) - RUNWAY.len / 2), Math.max(0, Math.abs(rw.cross) - RUNWAY.width / 2))) + ' m)', fact: '우주왕복선은 날개로 활공해 활주로에만 내릴 수 있어요. 귀환 도우미를 쓰면 역추진 시점과 비행 경로를 계산해 줘요.' };
+      this.log(this.fail.text, 'bad');
+      return;
+    }
     if (this.lifted && nalt <= 0) {
       this.pos = V.mul(V.norm(this.pos), PLANET.R);
       this.impact = this.speed; this.vel = [0, 0, 0];
@@ -719,6 +775,7 @@ export class Rocket3D {
     const lines = [];
     if (this.fail && this.fail.code !== 'ground') return { title: '비행 실패', lines: [this.fail.text], fact: this.fail.fact };
     if (this.deployedSat && this.deployedSat.ok) return { title: '임무 성공: 위성 배치!', lines: ['위성이 궤도를 돌고 있어요.'] };
+    if (this.state === 'landed' && this.touchdown) return { title: this.orbited ? '임무 성공: 궤도 비행 후 활주로 착륙!' : '활주로 착륙 성공', lines: ['내려앉는 속도 초속 ' + this.touchdown.vs.toFixed(1) + ' m · 활주로 중심선에서 ' + Math.abs(this.touchdown.cross).toFixed(0) + ' m'] };
     if (this.orbited) {
       if (this.state === 'landed') return { title: '임무 성공: 궤도 비행 후 귀환!', lines: ['우주를 돌고 무사히 돌아왔어요.'] };
       lines.push('궤도에는 올랐어요.');
